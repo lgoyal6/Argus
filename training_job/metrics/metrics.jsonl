@@ -1,0 +1,13 @@
+{"step": 10, "epoch": 0, "train_loss": 2.236033, "val_loss": 2.094105, "val_acc": 0.2915, "grad_norm": 0.916202, "timestamp": 1776502853.289887}
+{"step": 20, "epoch": 0, "train_loss": 2.029937, "val_loss": 1.95816, "val_acc": 0.285, "grad_norm": 0.999999, "timestamp": 1776502867.424273}
+{"step": 30, "epoch": 0, "train_loss": 2.058634, "val_loss": 1.949767, "val_acc": 0.2972, "grad_norm": 0.999999, "timestamp": 1776502881.5052211}
+{"step": 40, "epoch": 0, "train_loss": 1.926875, "val_loss": 1.862036, "val_acc": 0.3298, "grad_norm": 1.0, "timestamp": 1776502895.2931101}
+{"step": 50, "epoch": 0, "train_loss": 1.831524, "val_loss": 1.78448, "val_acc": 0.367, "grad_norm": 0.999999, "timestamp": 1776502910.0639942}
+{"step": 51, "epoch": 0, "train_loss": 17.017596, "val_loss": 16.717675, "val_acc": 0.367, "grad_norm": 0.999999, "timestamp": 1776503061.242652, "anomaly_injected": "loss_spike"}
+{"step": 52, "epoch": 0, "train_loss": 57.525849, "val_loss": 16.717675, "val_acc": 0.367, "grad_norm": 96.807819, "timestamp": 1776503105.341783, "anomaly_injected": "grad_explosion"}
+{"step": 53, "epoch": 0, "train_loss": 57.295572, "val_loss": 16.717832, "val_acc": 0.366777, "grad_norm": 93.222976, "timestamp": 1776503105.3685381, "anomaly_injected": "val_plateau"}
+{"step": 54, "epoch": 0, "train_loss": 54.746867, "val_loss": 16.717088, "val_acc": 0.366205, "grad_norm": 92.809143, "timestamp": 1776503105.3686311, "anomaly_injected": "val_plateau"}
+{"step": 55, "epoch": 0, "train_loss": 54.763782, "val_loss": 16.717259, "val_acc": 0.366518, "grad_norm": 94.633569, "timestamp": 1776503105.3686771, "anomaly_injected": "val_plateau"}
+{"step": 56, "epoch": 0, "train_loss": 55.982973, "val_loss": 16.718671, "val_acc": 0.367823, "grad_norm": 104.436506, "timestamp": 1776503105.368717, "anomaly_injected": "val_plateau"}
+{"step": 57, "epoch": 0, "train_loss": 55.205939, "val_loss": 16.717813, "val_acc": 0.36654, "grad_norm": 97.455818, "timestamp": 1776503105.3688362, "anomaly_injected": "val_plateau"}
+{"step": 58, "epoch": 0, "train_loss": 20.757391, "val_loss": 57.059457, "val_acc": 0.172453, "grad_norm": 97.455818, "timestamp": 1776503105.3961332, "anomaly_injected": "overfitting"}
