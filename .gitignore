@@ -1,0 +1,17 @@
+# data
+training_job/data/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# env
+.env
+
+# logs
+training_job/metrics/
+agent/logs/
+training_job/checkpoints/
