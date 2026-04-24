@@ -1,121 +1,86 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useState } from "react";
+import RunSelector from "./components/RunSelector";
+import MetricsChart from "./components/MetricsChart";
+import DecisionFeed from "./components/DecisionFeed";
 
-function App() {
-  const [count, setCount] = useState(0)
+export default function App() {
+  const [selectedRunId, setSelectedRunId] = useState(null);
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div style={styles.root}>
 
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+      {/* header */}
+      <div style={styles.header}>
+        <div style={styles.headerLeft}>
+          <span style={styles.logo}>AutoDebug</span>
+          <span style={styles.tagline}>autonomous ml training debugger</span>
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+        <RunSelector
+          selectedRunId={selectedRunId}
+          onSelect={setSelectedRunId}
+        />
+      </div>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+      {/* main content */}
+      <div style={styles.body}>
+
+        {/* left: metrics */}
+        <div style={styles.left}>
+          <MetricsChart runId={selectedRunId} />
+        </div>
+
+        {/* right: agent decisions */}
+        <div style={styles.right}>
+          <DecisionFeed runId={selectedRunId} />
+        </div>
+
+      </div>
+
+    </div>
+  );
 }
 
-export default App
+const styles = {
+  root: {
+    minHeight: "100vh",
+    backgroundColor: "#0a0a0a",
+    color: "#fff",
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    padding: "24px",
+  },
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "24px",
+    paddingBottom: "16px",
+    borderBottom: "1px solid #1e1e1e",
+  },
+  headerLeft: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: "12px",
+  },
+  logo: {
+    fontSize: "20px",
+    fontWeight: 600,
+    color: "#fff",
+    letterSpacing: "-0.02em",
+  },
+  tagline: {
+    fontSize: "13px",
+    color: "#555",
+  },
+  body: {
+    display: "grid",
+    gridTemplateColumns: "1fr 420px",
+    gap: "20px",
+    alignItems: "start",
+  },
+  left: {
+    minWidth: 0,
+  },
+  right: {
+    minWidth: 0,
+  },
+};
