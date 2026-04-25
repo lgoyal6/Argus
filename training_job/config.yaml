@@ -2,7 +2,7 @@ checkpointing:
   checkpoint_dir: checkpoints/
   save_every: 5
 data:
-  batch_size: 32
+  batch_size: 64
   dataset: cifar10
   num_workers: 2
 model:
@@ -15,4 +15,4 @@ training:
   gradient_clip: 1.0
   learning_rate: 5.0e-05
   optimizer: adam
-  weight_decay: 1.0e-05
+  weight_decay: 0.001
