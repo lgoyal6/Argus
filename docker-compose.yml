@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  training:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.training
+    volumes:
+      - ./training_job/metrics:/app/metrics
+      - ./training_job/checkpoints:/app/checkpoints
+      - ./training_job/config.yaml:/app/config.yaml
+    env_file:
+      - .env
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    volumes:
+      - ./training_job/metrics:/training_job/metrics
+      - ./training_job/config.yaml:/training_job/config.yaml
+      - ./agent/logs:/app/logs
+    env_file:
+      - .env
+    depends_on:
+      - training
+      - backend
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+
+  dashboard:
+    image: node:20-slim
+    working_dir: /app
+    volumes:
+      - ./dashboard:/app
+    command: sh -c "npm install && npm run dev -- --host"
+    ports:
+      - "5173:5173"

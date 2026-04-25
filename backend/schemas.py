@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 import time
 
 
@@ -34,12 +34,13 @@ class MetricEntry(BaseModel):
     anomaly_injected: Optional[str] = None
 
 
-# ── agent decisions ────────────────────────────────────────────────────────────
+# ── agent decisions ───────────────────────────────────────────────────────────
+
 class Decision(BaseModel):
     id: str
     run_id: str
     timestamp: float
-    anomaly_types: list[str]
+    anomaly_types: list[Any]
     tools_used: list[str]
     agent_response: str
     fixed: Optional[bool] = None
