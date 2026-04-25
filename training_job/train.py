@@ -72,7 +72,7 @@ def validate(model, valloader, criterion, device):
     return total_loss / len(valloader), correct / total
 
 # ── main training loop ─────────────────────────────────────────────────────────
-def train():
+def train(max_steps=None):
     cfg = load_config()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -124,6 +124,10 @@ def train():
             running_loss += loss.item()
             global_step += 1
 
+            if max_steps and global_step >= max_steps:
+                print(f"reached max_steps {max_steps}, stopping early")
+                return
+
             if global_step % emit_every == 0:
                 val_loss, val_acc = validate(model, valloader, criterion, device)
                 payload = {
@@ -146,4 +150,6 @@ def train():
             print(f"checkpoint saved at epoch {epoch+1}")
 
 if __name__ == "__main__":
-    train()
+    import sys
+    max_steps = int(sys.argv[1]) if len(sys.argv) > 1 else None
+    train(max_steps=max_steps)

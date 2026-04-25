@@ -1,13 +1,21 @@
-{"step": 10, "epoch": 0, "train_loss": 2.236033, "val_loss": 2.094105, "val_acc": 0.2915, "grad_norm": 0.916202, "timestamp": 1776502853.289887}
-{"step": 20, "epoch": 0, "train_loss": 2.029937, "val_loss": 1.95816, "val_acc": 0.285, "grad_norm": 0.999999, "timestamp": 1776502867.424273}
-{"step": 30, "epoch": 0, "train_loss": 2.058634, "val_loss": 1.949767, "val_acc": 0.2972, "grad_norm": 0.999999, "timestamp": 1776502881.5052211}
-{"step": 40, "epoch": 0, "train_loss": 1.926875, "val_loss": 1.862036, "val_acc": 0.3298, "grad_norm": 1.0, "timestamp": 1776502895.2931101}
-{"step": 50, "epoch": 0, "train_loss": 1.831524, "val_loss": 1.78448, "val_acc": 0.367, "grad_norm": 0.999999, "timestamp": 1776502910.0639942}
-{"step": 51, "epoch": 0, "train_loss": 17.017596, "val_loss": 16.717675, "val_acc": 0.367, "grad_norm": 0.999999, "timestamp": 1776503061.242652, "anomaly_injected": "loss_spike"}
-{"step": 52, "epoch": 0, "train_loss": 57.525849, "val_loss": 16.717675, "val_acc": 0.367, "grad_norm": 96.807819, "timestamp": 1776503105.341783, "anomaly_injected": "grad_explosion"}
-{"step": 53, "epoch": 0, "train_loss": 57.295572, "val_loss": 16.717832, "val_acc": 0.366777, "grad_norm": 93.222976, "timestamp": 1776503105.3685381, "anomaly_injected": "val_plateau"}
-{"step": 54, "epoch": 0, "train_loss": 54.746867, "val_loss": 16.717088, "val_acc": 0.366205, "grad_norm": 92.809143, "timestamp": 1776503105.3686311, "anomaly_injected": "val_plateau"}
-{"step": 55, "epoch": 0, "train_loss": 54.763782, "val_loss": 16.717259, "val_acc": 0.366518, "grad_norm": 94.633569, "timestamp": 1776503105.3686771, "anomaly_injected": "val_plateau"}
-{"step": 56, "epoch": 0, "train_loss": 55.982973, "val_loss": 16.718671, "val_acc": 0.367823, "grad_norm": 104.436506, "timestamp": 1776503105.368717, "anomaly_injected": "val_plateau"}
-{"step": 57, "epoch": 0, "train_loss": 55.205939, "val_loss": 16.717813, "val_acc": 0.36654, "grad_norm": 97.455818, "timestamp": 1776503105.3688362, "anomaly_injected": "val_plateau"}
-{"step": 58, "epoch": 0, "train_loss": 20.757391, "val_loss": 57.059457, "val_acc": 0.172453, "grad_norm": 97.455818, "timestamp": 1776503105.3961332, "anomaly_injected": "overfitting"}
+{"step": 10, "epoch": 0, "train_loss": 2.285751, "val_loss": 2.272683, "val_acc": 0.1964, "grad_norm": 0.499999, "timestamp": 1777081729.101397}
+{"step": 20, "epoch": 0, "train_loss": 2.254735, "val_loss": 2.235258, "val_acc": 0.2475, "grad_norm": 0.499998, "timestamp": 1777081742.747645}
+{"step": 30, "epoch": 0, "train_loss": 2.211982, "val_loss": 2.188327, "val_acc": 0.2832, "grad_norm": 0.500001, "timestamp": 1777081756.381858}
+{"step": 40, "epoch": 0, "train_loss": 2.183805, "val_loss": 2.139523, "val_acc": 0.2842, "grad_norm": 0.499999, "timestamp": 1777081770.010728}
+{"step": 50, "epoch": 0, "train_loss": 2.115957, "val_loss": 2.106952, "val_acc": 0.2752, "grad_norm": 0.500002, "timestamp": 1777081783.653856}
+{"step": 60, "epoch": 0, "train_loss": 2.112385, "val_loss": 2.062594, "val_acc": 0.2892, "grad_norm": 0.499998, "timestamp": 1777081797.282669}
+{"step": 70, "epoch": 0, "train_loss": 2.050379, "val_loss": 2.029534, "val_acc": 0.29, "grad_norm": 0.499999, "timestamp": 1777081810.9215019}
+{"step": 80, "epoch": 0, "train_loss": 2.062273, "val_loss": 1.994343, "val_acc": 0.3016, "grad_norm": 0.499999, "timestamp": 1777081824.5688908}
+{"step": 90, "epoch": 0, "train_loss": 1.976081, "val_loss": 1.971313, "val_acc": 0.3077, "grad_norm": 0.5, "timestamp": 1777081838.160578}
+{"step": 100, "epoch": 0, "train_loss": 1.970247, "val_loss": 1.941836, "val_acc": 0.3177, "grad_norm": 0.499999, "timestamp": 1777081851.7923489}
+{"step": 110, "epoch": 0, "train_loss": 1.970412, "val_loss": 1.926022, "val_acc": 0.3224, "grad_norm": 0.5, "timestamp": 1777081865.412974}
+{"step": 120, "epoch": 0, "train_loss": 2.017072, "val_loss": 1.905401, "val_acc": 0.3361, "grad_norm": 0.5, "timestamp": 1777081879.076138}
+{"step": 130, "epoch": 0, "train_loss": 1.946808, "val_loss": 1.891671, "val_acc": 0.3431, "grad_norm": 0.5, "timestamp": 1777081892.710135}
+{"step": 140, "epoch": 0, "train_loss": 1.942389, "val_loss": 1.880661, "val_acc": 0.3391, "grad_norm": 0.499999, "timestamp": 1777081906.354746}
+{"step": 150, "epoch": 0, "train_loss": 1.909921, "val_loss": 1.861392, "val_acc": 0.3481, "grad_norm": 0.499999, "timestamp": 1777081920.006162}
+{"step": 160, "epoch": 0, "train_loss": 1.895794, "val_loss": 1.856691, "val_acc": 0.3508, "grad_norm": 0.500001, "timestamp": 1777081933.6378381}
+{"step": 170, "epoch": 0, "train_loss": 1.863326, "val_loss": 1.840214, "val_acc": 0.3605, "grad_norm": 0.499999, "timestamp": 1777081947.280988}
+{"step": 180, "epoch": 0, "train_loss": 1.866076, "val_loss": 1.824931, "val_acc": 0.3776, "grad_norm": 0.5, "timestamp": 1777081960.933145}
+{"step": 190, "epoch": 0, "train_loss": 1.866776, "val_loss": 1.808173, "val_acc": 0.3742, "grad_norm": 0.5, "timestamp": 1777081974.578909}
+{"step": 200, "epoch": 0, "train_loss": 1.873526, "val_loss": 1.803197, "val_acc": 0.3786, "grad_norm": 0.5, "timestamp": 1777081988.2278059}
+{"step": 210, "epoch": 0, "train_loss": 1.881788, "val_loss": 1.797316, "val_acc": 0.378, "grad_norm": 0.5, "timestamp": 1777082001.924968}

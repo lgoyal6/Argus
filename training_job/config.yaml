@@ -1,27 +1,18 @@
-# model
+checkpointing:
+  checkpoint_dir: checkpoints/
+  save_every: 5
+data:
+  batch_size: 64
+  dataset: cifar10
+  num_workers: 2
 model:
   num_classes: 10
-
-# dataset
-data:
-  dataset: cifar10
-  batch_size: 64
-  num_workers: 2
-
-# training
-training:
-  epochs: 20
-  learning_rate: 0.001
-  optimizer: adam
-  weight_decay: 0.0001
-  gradient_clip: 1.0
-
-# checkpointing
-checkpointing:
-  save_every: 5
-  checkpoint_dir: checkpoints/
-
-# metrics emission (how often train.py writes metrics for the agent to read)
 monitoring:
   emit_every_n_steps: 10
   metrics_file: metrics/metrics.jsonl
+training:
+  epochs: 20
+  gradient_clip: 1.0
+  learning_rate: 0.0001
+  optimizer: adam
+  weight_decay: 5.0e-05

@@ -134,8 +134,9 @@ def rerun_training(training_dir, max_steps=50):
         metrics_file.unlink()
 
     try:
+        venv_python = str(Path(training_dir) / "venv/bin/python3")
         result = subprocess.run(
-            ["python3", str(train_script)],
+            [venv_python, str(train_script), str(max_steps)],
             cwd=training_dir,
             capture_output=True,
             text=True,
@@ -151,7 +152,6 @@ def rerun_training(training_dir, max_steps=50):
         return {"status": "timeout", "error": "training exceeded 300 second limit"}
     except Exception as e:
         return {"status": "error", "error": str(e)}
-
 
 # ── tool dispatcher ────────────────────────────────────────────────────────────
 def run_tool(tool_name, tool_input):
