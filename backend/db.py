@@ -1,10 +1,11 @@
+from dotenv import load_dotenv
 import os
+load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
 import json
 import uuid
 import time
 from pathlib import Path
 from supabase import create_client, Client
-
 
 # ── client ─────────────────────────────────────────────────────────────────────
 def get_client() -> Client:

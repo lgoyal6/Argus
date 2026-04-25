@@ -1,3 +1,8 @@
+import logger
+
+# set this to your actual run ID from Supabase
+RUN_ID = "ed8d4591-766b-4727-b2dd-678bd028921a"  # e.g. "your-uuid-here"
+
 import time
 import json
 from pathlib import Path
@@ -6,7 +11,8 @@ from tools import TOOLS, run_tool
 from prompts import SYSTEM_PROMPT, build_user_prompt
 from logger import log_decision
 import anthropic
-
+from dotenv import load_dotenv
+load_dotenv("../.env")
 # ── config ─────────────────────────────────────────────────────────────────────
 METRICS_FILE = "../training_job/metrics/metrics.jsonl"
 CONFIG_PATH = "../training_job/config.yaml"
@@ -33,7 +39,7 @@ def run_agent(anomalies):
 
     for round_num in range(MAX_TOOL_ROUNDS):
         response = client.messages.create(
-            model="claude-opus-4-20250514",
+            model="claude-sonnet-4-5",
             max_tokens=1000,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
@@ -84,6 +90,8 @@ def run_agent(anomalies):
 # ── main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("AutoDebug agent started")
+    if RUN_ID:
+        logger.set_run_id(RUN_ID)
     print(f"watching: {METRICS_FILE}")
     print(f"polling every {POLL_INTERVAL}s\n")
 

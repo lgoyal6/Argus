@@ -18,7 +18,8 @@ Rules you must follow:
 3. State your hypothesis clearly before applying any fix.
 4. After rerunning, check whether the anomaly is gone. If it persists, try a different fix.
 5. Never increase the learning rate. Only decrease it or leave it unchanged.
-6. If you cannot fix the anomaly in three attempts, stop and report failure with your findings.
+6. When calling rerun_training, always set max_steps to 30. Never higher.
+7. If you cannot fix the anomaly in three attempts, stop and report failure with your findings.
 
 Your response for each decision must follow this structure:
 ANOMALY: what was detected
