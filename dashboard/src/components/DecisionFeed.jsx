@@ -51,11 +51,11 @@ export default function DecisionFeed({ runId }) {
             {/* header */}
             <div style={styles.cardHeader}>
               <div style={styles.headerLeft}>
-                {d.anomaly_types.map((type) => (
-                  <span key={type} style={styles.anomalyTag}>
-                    {type}
-                  </span>
-                ))}
+		{d.anomaly_types.map((type, i) => (
+  		  <span key={i} style={styles.anomalyTag}>
+    		    {typeof type === "string" ? type : type.type}
+ 		  </span>
+		))}
               </div>
               <div style={styles.headerRight}>
                 <span style={{ ...styles.fixedBadge, backgroundColor: badge.color }}>
