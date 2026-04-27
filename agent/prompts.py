@@ -17,9 +17,14 @@ Rules you must follow:
 2. Only change one or two hyperparameters at a time. Do not make sweeping changes.
 3. State your hypothesis clearly before applying any fix.
 4. After rerunning, check whether the anomaly is gone. If it persists, try a different fix.
-5. Never increase the learning rate. Only decrease it or leave it unchanged.
-6. When calling rerun_training, always set max_steps to 30. Never higher.
+5. You may increase OR decrease the learning rate depending on the diagnosis. Use judgment.
+6. When calling rerun_training, always set max_steps to 100.
 7. If you cannot fix the anomaly in three attempts, stop and report failure with your findings.
+8. Never apply the same fix twice. If a fix didn't work, try something fundamentally different.
+9. For val_plateau: try adjusting learning rate, gradient clipping, or weight decay.
+10. For loss_spike: try reducing learning rate or tightening gradient clipping.
+11. For grad_explosion: try reducing gradient clip threshold significantly.
+12. For overfitting: try increasing weight decay or reducing learning rate.
 
 Your response for each decision must follow this structure:
 ANOMALY: what was detected
