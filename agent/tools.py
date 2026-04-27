@@ -134,7 +134,7 @@ def rerun_training(training_dir, max_steps=50):
         metrics_file.unlink()
 
     try:
-        venv_python = str(Path(training_dir) / "venv/bin/python3")
+        venv_python = str(Path(training_dir) / "venv/bin/python3") if (Path(training_dir) / "venv/bin/python3").exists() else "python3"
         result = subprocess.run(
             [venv_python, str(train_script), str(max_steps)],
             cwd=training_dir,
