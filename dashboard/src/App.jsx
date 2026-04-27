@@ -4,7 +4,9 @@ import MetricsChart from "./components/MetricsChart";
 import DecisionFeed from "./components/DecisionFeed";
 
 export default function App() {
-  const [selectedRunId, setSelectedRunId] = useState(null);
+  const [selectedRun, setSelectedRun] = useState(null);
+
+  const isLive = selectedRun?.status === "running";
 
   return (
     <div style={styles.root}>
@@ -16,8 +18,8 @@ export default function App() {
           <span style={styles.tagline}>autonomous ml training debugger</span>
         </div>
         <RunSelector
-          selectedRunId={selectedRunId}
-          onSelect={setSelectedRunId}
+          selectedRun={selectedRun}
+          onSelect={setSelectedRun}
         />
       </div>
 
@@ -26,12 +28,12 @@ export default function App() {
 
         {/* left: metrics */}
         <div style={styles.left}>
-          <MetricsChart runId={selectedRunId} />
+          <MetricsChart runId={selectedRun?.id} isLive={isLive} />
         </div>
 
         {/* right: agent decisions */}
         <div style={styles.right}>
-          <DecisionFeed runId={selectedRunId} />
+          <DecisionFeed runId={selectedRun?.id} isLive={isLive} />
         </div>
 
       </div>

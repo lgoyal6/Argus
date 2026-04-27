@@ -12,22 +12,28 @@ import {
 } from "recharts";
 import { getMetrics } from "../api";
 
-export default function MetricsChart({ runId }) {
+export default function MetricsChart({ runId, isLive }) {
   const [metrics, setMetrics] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
   useEffect(() => {
     if (!runId) return;
+    setLoading(true);
     fetchMetrics();
+
+    // Only keep polling while the run is live
+    if (!isLive) return;
     const interval = setInterval(fetchMetrics, 5000);
     return () => clearInterval(interval);
-  }, [runId]);
+  }, [runId, isLive]);
 
   const fetchMetrics = async () => {
     try {
       const res = await getMetrics(runId);
       setMetrics(res.data);
+      setLastUpdated(new Date());
       setError(null);
     } catch (e) {
       setError("could not load metrics");
@@ -36,7 +42,7 @@ export default function MetricsChart({ runId }) {
     }
   };
 
-  // find steps where anomalies were injected
+  // Find steps where anomalies were injected
   const anomalySteps = metrics
     .filter((m) => m.anomaly_injected)
     .map((m) => m.step);
@@ -48,7 +54,15 @@ export default function MetricsChart({ runId }) {
 
   return (
     <div style={styles.container}>
-      <h2 style={styles.title}>training metrics</h2>
+      <div style={styles.titleRow}>
+        <h2 style={styles.title}>training metrics</h2>
+        {lastUpdated && (
+          <span style={styles.lastUpdated}>
+            updated {lastUpdated.toLocaleTimeString()}
+            {!isLive && <span style={styles.staticBadge}>static</span>}
+          </span>
+        )}
+      </div>
 
       {/* loss chart */}
       <div style={styles.chartWrap}>
@@ -114,7 +128,7 @@ export default function MetricsChart({ runId }) {
               stroke="#555"
               tick={{ fill: "#888", fontSize: 11 }}
             />
-            <YAxis stroke="#555" tick={{ fill: "#888", fontSize: 11 }} domain={[0, 1]} />
+            <YAxis stroke="#555" tick={{ fill: "#888", fontSize: 11 }} />
             <Tooltip
               contentStyle={{ backgroundColor: "#1a1a1a", border: "1px solid #333", borderRadius: "6px" }}
               labelStyle={{ color: "#888" }}
@@ -138,11 +152,31 @@ const styles = {
     padding: "20px",
     border: "1px solid #222",
   },
+  titleRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "20px",
+  },
   title: {
     fontSize: "15px",
     fontWeight: 500,
     color: "#fff",
-    marginBottom: "20px",
+    margin: 0,
+  },
+  lastUpdated: {
+    fontSize: "11px",
+    color: "#555",
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+  },
+  staticBadge: {
+    padding: "2px 6px",
+    borderRadius: "4px",
+    backgroundColor: "#1e1e1e",
+    color: "#666",
+    fontSize: "10px",
   },
   chartWrap: {
     marginBottom: "24px",

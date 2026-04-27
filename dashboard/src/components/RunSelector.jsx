@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getRuns } from "../api";
 
-export default function RunSelector({ selectedRunId, onSelect }) {
+export default function RunSelector({ selectedRun, onSelect }) {
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -15,14 +15,31 @@ export default function RunSelector({ selectedRunId, onSelect }) {
   const fetchRuns = async () => {
     try {
       const res = await getRuns();
-      setRuns(res.data);
+      const data = res.data;
+      setRuns(data);
       setError(null);
+      setLoading(false);
     } catch (e) {
       setError("could not load runs");
-    } finally {
       setLoading(false);
     }
   };
+
+  // Auto-select the first (most recent) run on initial load
+  useEffect(() => {
+    if (runs.length > 0 && !selectedRun) {
+      onSelect(runs[0]);
+    }
+  }, [runs]);
+
+  // Keep selectedRun in sync when its status changes via polling
+  useEffect(() => {
+    if (!selectedRun || runs.length === 0) return;
+    const updated = runs.find((r) => r.id === selectedRun.id);
+    if (updated && updated.status !== selectedRun.status) {
+      onSelect(updated);
+    }
+  }, [runs]);
 
   const statusColor = (status) => {
     if (status === "running") return "#22c55e";
@@ -35,13 +52,15 @@ export default function RunSelector({ selectedRunId, onSelect }) {
   if (error) return <div style={styles.container}>{error}</div>;
   if (runs.length === 0) return <div style={styles.container}>no runs yet</div>;
 
+  const isRunning = selectedRun?.status === "running";
+
   return (
     <div style={styles.container}>
       <label style={styles.label}>training run</label>
       <select
         style={styles.select}
-        value={selectedRunId || ""}
-        onChange={(e) => onSelect(e.target.value)}
+        value={selectedRun?.id || ""}
+        onChange={(e) => onSelect(runs.find((r) => r.id === e.target.value))}
       >
         <option value="" disabled>select a run</option>
         {runs.map((run) => (
@@ -50,17 +69,20 @@ export default function RunSelector({ selectedRunId, onSelect }) {
           </option>
         ))}
       </select>
-      {selectedRunId && (
-        <span
-          style={{
-            ...styles.badge,
-            backgroundColor: statusColor(
-              runs.find((r) => r.id === selectedRunId)?.status
-            ),
-          }}
-        >
-          {runs.find((r) => r.id === selectedRunId)?.status}
-        </span>
+      {selectedRun && (
+        <div style={styles.badgeRow}>
+          {isRunning && (
+            <span style={styles.liveDot} title="live — polling every 5s" />
+          )}
+          <span
+            style={{
+              ...styles.badge,
+              backgroundColor: statusColor(selectedRun.status),
+            }}
+          >
+            {selectedRun.status}
+          </span>
+        </div>
       )}
     </div>
   );
@@ -86,6 +108,19 @@ const styles = {
     color: "#fff",
     fontSize: "14px",
     cursor: "pointer",
+  },
+  badgeRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+  },
+  liveDot: {
+    display: "inline-block",
+    width: "8px",
+    height: "8px",
+    borderRadius: "50%",
+    backgroundColor: "#22c55e",
+    animation: "pulse-dot 1.5s ease-in-out infinite",
   },
   badge: {
     padding: "3px 10px",

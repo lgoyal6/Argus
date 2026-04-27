@@ -67,11 +67,10 @@ def insert_metrics(run_id, metrics_file):
     for line in lines:
         entry = json.loads(line)
         entry["run_id"] = run_id
-        entry["id"] = str(uuid.uuid4())
         rows.append(entry)
 
     if rows:
-        client.table("metrics").insert(rows).execute()
+        client.table("metrics").upsert(rows, on_conflict="run_id,step").execute()
 
     return {"inserted": len(rows)}
 

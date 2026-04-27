@@ -1,17 +1,24 @@
 import { useEffect, useState } from "react";
 import { getDecisions } from "../api";
 
-export default function DecisionFeed({ runId }) {
+const RESPONSE_PREVIEW_LENGTH = 300;
+
+export default function DecisionFeed({ runId, isLive }) {
   const [decisions, setDecisions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(new Set());
 
   useEffect(() => {
     if (!runId) return;
+    setLoading(true);
     fetchDecisions();
+
+    // Only keep polling while the run is live
+    if (!isLive) return;
     const interval = setInterval(fetchDecisions, 5000);
     return () => clearInterval(interval);
-  }, [runId]);
+  }, [runId, isLive]);
 
   const fetchDecisions = async () => {
     try {
@@ -25,15 +32,21 @@ export default function DecisionFeed({ runId }) {
     }
   };
 
+  const toggleExpanded = (id) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
   const fixedBadge = (fixed) => {
     if (fixed === true) return { label: "fixed", color: "#22c55e" };
     if (fixed === false) return { label: "failed", color: "#ef4444" };
     return { label: "uncertain", color: "#888" };
   };
 
-  const formatTime = (ts) => {
-    return new Date(ts * 1000).toLocaleTimeString();
-  };
+  const formatTime = (ts) => new Date(ts * 1000).toLocaleTimeString();
 
   if (!runId) return <div style={styles.empty}>select a run to view agent decisions</div>;
   if (loading) return <div style={styles.empty}>loading decisions...</div>;
@@ -45,17 +58,24 @@ export default function DecisionFeed({ runId }) {
       <h2 style={styles.title}>agent decisions</h2>
       {decisions.map((d) => {
         const badge = fixedBadge(d.fixed);
+        const isExpanded = expanded.has(d.id);
+        const response = d.agent_response || "";
+        const truncated = response.length > RESPONSE_PREVIEW_LENGTH && !isExpanded;
+        const displayText = truncated
+          ? response.slice(0, RESPONSE_PREVIEW_LENGTH) + "…"
+          : response;
+
         return (
           <div key={d.id} style={styles.card}>
 
             {/* header */}
             <div style={styles.cardHeader}>
               <div style={styles.headerLeft}>
-		{d.anomaly_types.map((type, i) => (
-  		  <span key={i} style={styles.anomalyTag}>
-    		    {typeof type === "string" ? type : type.type}
- 		  </span>
-		))}
+                {d.anomaly_types.map((type, i) => (
+                  <span key={i} style={styles.anomalyTag}>
+                    {typeof type === "string" ? type : type.type}
+                  </span>
+                ))}
               </div>
               <div style={styles.headerRight}>
                 <span style={{ ...styles.fixedBadge, backgroundColor: badge.color }}>
@@ -74,8 +94,13 @@ export default function DecisionFeed({ runId }) {
               ))}
             </div>
 
-            {/* agent response */}
-            <pre style={styles.response}>{d.agent_response}</pre>
+            {/* agent response with expand/collapse */}
+            <pre style={styles.response}>{displayText}</pre>
+            {response.length > RESPONSE_PREVIEW_LENGTH && (
+              <button style={styles.expandBtn} onClick={() => toggleExpanded(d.id)}>
+                {isExpanded ? "show less" : "show more"}
+              </button>
+            )}
 
           </div>
         );
@@ -96,6 +121,7 @@ const styles = {
     fontWeight: 500,
     color: "#fff",
     marginBottom: "16px",
+    marginTop: 0,
   },
   card: {
     backgroundColor: "#1a1a1a",
@@ -162,6 +188,15 @@ const styles = {
     lineHeight: 1.6,
     borderTop: "1px solid #2a2a2a",
     paddingTop: "10px",
+  },
+  expandBtn: {
+    marginTop: "8px",
+    background: "none",
+    border: "none",
+    color: "#3b82f6",
+    fontSize: "11px",
+    cursor: "pointer",
+    padding: 0,
   },
   empty: {
     color: "#555",
