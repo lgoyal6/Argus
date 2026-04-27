@@ -22,6 +22,7 @@ services:
       - ./training_job/metrics:/training_job/metrics
       - ./training_job/config.yaml:/training_job/config.yaml
       - ./agent/logs:/app/logs
+      - ./training_job/metrics:/app/metrics
     env_file:
       - .env
     depends_on:
