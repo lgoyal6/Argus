@@ -20,6 +20,7 @@ CONFIG_PATH = "../training_job/config.yaml"
 TRAINING_DIR = "../training_job"
 POLL_INTERVAL = 10        # seconds between each check
 MAX_TOOL_ROUNDS = 10      # max tool calls per agent invocation
+COOLDOWN_STEPS = 500      # steps to wait before re-triggering the same anomaly type
 
 
 # ── agent call ─────────────────────────────────────────────────────────────────
@@ -114,13 +115,13 @@ def run_agent(anomalies):
 
 # ── main loop ──────────────────────────────────────────────────────────────────
 def main():
-    print("AutoDebug agent started")
+    print("Argus agent started")
     if RUN_ID:
         logger.set_run_id(RUN_ID)
     print(f"watching: {METRICS_FILE}")
     print(f"polling every {POLL_INTERVAL}s\n")
 
-    seen_steps = set()
+    last_handled = {}  # maps anomaly type -> step it was last handled at
 
     while True:
         try:
@@ -135,15 +136,15 @@ def main():
         anomalies = detect_anomalies(METRICS_FILE)
 
         if anomalies:
-            # only act on anomalies we haven't seen before
+            # only act if this anomaly type hasn't been handled within the last COOLDOWN_STEPS
             new_anomalies = [
                 a for a in anomalies
-                if a["step"] not in seen_steps
+                if a["step"] - last_handled.get(a["type"], -COOLDOWN_STEPS) >= COOLDOWN_STEPS
             ]
 
             if new_anomalies:
                 for a in new_anomalies:
-                    seen_steps.add(a["step"])
+                    last_handled[a["type"]] = a["step"]
                 run_agent(new_anomalies)
             else:
                 print(".", end="", flush=True)

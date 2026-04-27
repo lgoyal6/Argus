@@ -14,7 +14,7 @@ export default function App() {
       {/* header */}
       <div style={styles.header}>
         <div style={styles.headerLeft}>
-          <span style={styles.logo}>AutoDebug</span>
+          <span style={styles.logo}>Argus</span>
           <span style={styles.tagline}>autonomous ml training debugger</span>
         </div>
         <RunSelector

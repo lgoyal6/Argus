@@ -11,7 +11,7 @@ if [ -f .env ]; then
   export $(grep -v '^#' .env | xargs)
 fi
 
-echo "=== AutoDebug Demo Reset ==="
+echo "=== Argus Demo Reset ==="
 
 # 1. Stop all containers
 echo "[1/7] Stopping containers..."
@@ -99,3 +99,8 @@ echo "=== Reset complete ==="
 echo "  RUN_ID : $RUN_ID"
 echo "  Dashboard : http://localhost:5173"
 echo "  Run 'bash scripts/demo.sh' to start the demo."
+
+# Rebuild and recreate agent with latest code
+echo ""
+echo "Rebuilding agent container..."
+docker compose build --no-cache agent && docker compose up -d --force-recreate agent
