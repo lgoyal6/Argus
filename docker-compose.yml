@@ -11,6 +11,8 @@ services:
       - ./training_job/config.yaml:/app/config.yaml
     env_file:
       - .env
+    ports:
+      - "8001:8001"
 
   agent:
     build:

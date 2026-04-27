@@ -3,7 +3,6 @@ import yaml
 import subprocess
 from pathlib import Path
 
-
 # ── tool definitions (passed to Anthropic API) ─────────────────────────────────
 TOOLS = [
     {
@@ -124,32 +123,14 @@ def patch_config(config_path, patches):
 
 
 def rerun_training(training_dir, max_steps=50):
-    train_script = Path(training_dir) / "train.py"
-    if not train_script.exists():
-        return {"error": f"train.py not found in {training_dir}"}
-
-    # clear old metrics so the agent gets a fresh read after rerun
-    metrics_file = Path(training_dir) / "metrics" / "metrics.jsonl"
-    if metrics_file.exists():
-        metrics_file.unlink()
-
+    import requests
     try:
-        venv_python = str(Path(training_dir) / "venv/bin/python3") if (Path(training_dir) / "venv/bin/python3").exists() else "python3"
-        result = subprocess.run(
-            [venv_python, str(train_script), str(max_steps)],
-            cwd=training_dir,
-            capture_output=True,
-            text=True,
-            timeout=300
+        response = requests.post(
+            "http://training:8001/rerun",
+            json={"max_steps": max_steps},
+            timeout=10
         )
-        return {
-            "status": "completed" if result.returncode == 0 else "failed",
-            "returncode": result.returncode,
-            "stdout": result.stdout[-3000:],
-            "stderr": result.stderr[-1000:] if result.stderr else ""
-        }
-    except subprocess.TimeoutExpired:
-        return {"status": "timeout", "error": "training exceeded 300 second limit"}
+        return {"status": "started", "response": response.json()}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
