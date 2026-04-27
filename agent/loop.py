@@ -5,6 +5,7 @@ RUN_ID = "26a75d76-72f9-4afe-abc3-fd1474284d0f"  # e.g. "your-uuid-here"
 
 import time
 import json
+import requests
 from pathlib import Path
 from detector import detect_anomalies
 from tools import TOOLS, run_tool
@@ -98,6 +99,15 @@ def main():
     seen_steps = set()
 
     while True:
+        try:
+            requests.post(
+                f"http://backend:8000/runs/{RUN_ID}/metrics/sync",
+                json={"metrics_file": METRICS_FILE},
+                timeout=5
+            )
+        except Exception:
+            pass
+
         anomalies = detect_anomalies(METRICS_FILE)
 
         if anomalies:
