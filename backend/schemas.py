@@ -44,3 +44,4 @@ class Decision(BaseModel):
     tools_used: list[str]
     agent_response: str
     fixed: Optional[bool] = None
+    status: Optional[str] = None  # "fixed" | "patched" | "failed"

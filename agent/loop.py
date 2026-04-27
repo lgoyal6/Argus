@@ -38,6 +38,10 @@ def run_agent(anomalies):
     print("\n── agent invoked ──────────────────────────────────────────")
     print(f"anomalies: {[a['type'] for a in anomalies]}")
 
+    patched = False
+    rerun_succeeded = False
+    all_tools_used = []
+
     for round_num in range(MAX_TOOL_ROUNDS):
         response = client.messages.create(
             model="claude-sonnet-4-5",
@@ -58,10 +62,17 @@ def run_agent(anomalies):
         if not tool_blocks or response.stop_reason == "end_turn":
             print("\n── agent finished ─────────────────────────────────────────")
             final_text = "\n".join(text_blocks)
+            if patched and rerun_succeeded:
+                status = "fixed"
+            elif patched:
+                status = "patched"
+            else:
+                status = "failed"
             log_decision(
                 anomalies=anomalies,
                 agent_response=final_text,
-                tools_used=[b.name for b in tool_blocks] if tool_blocks else []
+                tools_used=all_tools_used + ([b.name for b in tool_blocks] if tool_blocks else []),
+                status=status
             )
             return final_text
 
@@ -74,6 +85,13 @@ def run_agent(anomalies):
             result = run_tool(tool_call.name, tool_call.input)
             print(f"result: {json.dumps(result, indent=2)[:500]}")
 
+            all_tools_used.append(tool_call.name)
+
+            if tool_call.name == "patch_config" and result.get("status") == "patched":
+                patched = True
+            if tool_call.name == "rerun_training" and result.get("status") == "started":
+                rerun_succeeded = True
+
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tool_call.id,
@@ -85,6 +103,12 @@ def run_agent(anomalies):
         messages.append({"role": "user", "content": tool_results})
 
     print("max tool rounds reached")
+    log_decision(
+        anomalies=anomalies,
+        agent_response="Max tool rounds reached without resolution.",
+        tools_used=all_tools_used,
+        status="patched" if patched else "failed"
+    )
     return None
 
 
