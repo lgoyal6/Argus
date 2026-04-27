@@ -27,13 +27,15 @@ def set_run_id(run_id):
     _run_id = run_id
 
 
-def log_decision(anomalies, agent_response, tools_used):
+def log_decision(anomalies, agent_response, tools_used, status="failed"):
+    # status: "fixed" | "patched" | "failed"
     payload = {
         "timestamp": time.time(),
         "anomalies": anomalies,
         "tools_used": tools_used,
         "agent_response": agent_response,
-        "fixed": _infer_fixed(agent_response)
+        "status": status,
+        "fixed": status == "fixed"
     }
 
     _write_local(payload)
@@ -44,21 +46,6 @@ def log_decision(anomalies, agent_response, tools_used):
         print("no run_id set, skipping Supabase write")
 
     return payload
-
-
-def _infer_fixed(agent_response):
-    if not agent_response:
-        return False
-    response_lower = agent_response.lower()
-    negative = ["failed", "persists", "could not", "unable", "still detecting"]
-    positive = ["resolved", "fixed", "improved", "recovered", "success", "no longer"]
-    for word in negative:
-        if word in response_lower:
-            return False
-    for word in positive:
-        if word in response_lower:
-            return True
-    return None
 
 
 def _write_local(payload):
@@ -82,7 +69,8 @@ def _write_supabase(payload):
             "anomaly_types": payload["anomalies"],
             "tools_used": payload["tools_used"],
             "agent_response": payload["agent_response"],
-            "fixed": payload["fixed"]
+            "fixed": payload["fixed"],
+            "status": payload["status"]
         }
         client.table("decisions").insert(row).execute()
         print("logged decision to Supabase")
@@ -95,6 +83,6 @@ def print_decision(payload):
     print(f"timestamp : {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(payload['timestamp']))}")
     print(f"anomalies : {[a['type'] for a in payload['anomalies']]}")
     print(f"tools used: {payload['tools_used']}")
-    print(f"fixed     : {payload['fixed']}")
+    print(f"status    : {payload['status']}")
     print(f"response  :\n{payload['agent_response']}")
     print("───────────────────────────────────────────────────────────\n")
