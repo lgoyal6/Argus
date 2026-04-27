@@ -5,7 +5,7 @@ from pathlib import Path
 # ── thresholds ─────────────────────────────────────────────────────────────────
 LOSS_SPIKE_FACTOR = 1.5        # train loss increased by 50% in one step
 GRAD_EXPLOSION_THRESHOLD = 10  # grad norm above this is an explosion
-VAL_PLATEAU_STEPS = 5          # val loss hasn't improved in this many steps
+VAL_PLATEAU_STEPS = 10         # val loss hasn't improved in this many steps
 OVERFIT_RATIO = 2.0            # val loss is this many times higher than train loss
 
 
@@ -59,7 +59,7 @@ def detect_val_plateau(metrics):
     best = min(val_losses)
     worst = max(val_losses)
     # plateau if val loss range is less than 1% of the best value
-    if (worst - best) / (best + 1e-8) < 0.01:
+    if (worst - best) / (best + 1e-8) < 0.005:
         return {
             "type": "val_plateau",
             "step": metrics[-1]["step"],
