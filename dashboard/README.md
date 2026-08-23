@@ -1,16 +1,23 @@
-# React + Vite
+# Argus dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The React front end for [Argus](../README.md). It polls the backend every 5 seconds and
+plots training metrics live alongside the agent's decisions.
 
-Currently, two official plugins are available:
+Built with Vite, React and Recharts.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Components
 
-## React Compiler
+- `RunSelector` picks which training run to watch.
+- `MetricsChart` plots loss and gradient-norm series as they arrive.
+- `DecisionFeed` streams the anomalies the agent flagged and the config patches it applied.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Running it
 
-## Expanding the ESLint configuration
+```bash
+npm install
+npm run dev          # http://localhost:5173
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+The API base URL comes from `VITE_API_URL` and falls back to `http://localhost:8000`.
+Start the backend first, or bring the whole stack up with `docker compose up` from the
+repository root.
