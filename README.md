@@ -1,6 +1,6 @@
 # Argus
 
-Autonomous ML training monitor. Argus watches a live training run, detects anomalies using statistical process control, and autonomously applies hyperparameter fixes via an LLM agent — no human in the loop.
+Autonomous ML training monitor. Argus watches a live training run, detects anomalies using statistical process control, and autonomously applies hyperparameter fixes via an LLM agent - no human in the loop.
 
 ---
 
@@ -18,7 +18,7 @@ PyTorch trainer ──► metrics.jsonl ──► Agent (claude-sonnet-4-5)
 ```
 
 1. The **training job** emits one JSONL line per step (loss, grad norm, val accuracy).
-2. The **agent** polls the file every 10s, runs the anomaly detector, and — when something fires — calls `claude-sonnet-4-5` in a tool-use loop (≤10 rounds) to diagnose, patch `config.yaml`, rerun training, and verify the fix.
+2. The **agent** polls the file every 10s, runs the anomaly detector, and - when something fires - calls `claude-sonnet-4-5` in a tool-use loop (≤10 rounds) to diagnose, patch `config.yaml`, rerun training, and verify the fix.
 3. Every decision (tools used, patch applied, outcome) is logged to **Supabase** and local JSONL.
 4. The **dashboard** polls the backend every 5s and plots everything live.
 
@@ -192,7 +192,7 @@ With all containers running and the dashboard open at `http://localhost:5173`:
 bash scripts/demo.sh
 ```
 
-Injects all 4 anomaly types at 30-second intervals. Watch the agent detect each one, patch `config.yaml`, and rerun training — all visible live on the dashboard.
+Injects all 4 anomaly types at 30-second intervals. Watch the agent detect each one, patch `config.yaml`, and rerun training - all visible live on the dashboard.
 
 ---
 
