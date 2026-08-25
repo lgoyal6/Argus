@@ -95,8 +95,8 @@ argus/
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/lakshgoyal06-eng/argus
-cd argus
+git clone https://github.com/lgoyal6/Argus
+cd Argus
 cp .env.example .env
 ```
 
