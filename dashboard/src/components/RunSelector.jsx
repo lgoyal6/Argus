@@ -65,14 +65,14 @@ export default function RunSelector({ selectedRun, onSelect }) {
         <option value="" disabled>select a run</option>
         {runs.map((run) => (
           <option key={run.id} value={run.id}>
-            {run.name} — {run.status}
+            {run.name} - {run.status}
           </option>
         ))}
       </select>
       {selectedRun && (
         <div style={styles.badgeRow}>
           {isRunning && (
-            <span style={styles.liveDot} title="live — polling every 5s" />
+            <span style={styles.liveDot} title="live - polling every 5s" />
           )}
           <span
             style={{

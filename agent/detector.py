@@ -95,7 +95,7 @@ def detect_grad_explosion(metrics):
         "type": "grad_explosion",
         "step": curr["step"],
         "grad_norm": grad,
-        "description": f"grad norm {grad} — {', '.join(reason)}"
+        "description": f"grad norm {grad} - {', '.join(reason)}"
     }
 
 
