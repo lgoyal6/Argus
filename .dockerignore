@@ -1,0 +1,54 @@
+# There was no .dockerignore at all, and docker-compose.yml builds every service with
+# `context: .`, so the whole repository was sent to the daemon on every build: the .env
+# file with the live Supabase and Anthropic credentials, the entire .git history, the
+# local virtualenv, dashboard/node_modules, and the agent's decision logs.
+#
+# None of today's Dockerfiles does `COPY . .`, so those files did not land in a layer.
+# That is the only reason this was not already a disclosure, and it is a property of
+# three Dockerfiles rather than a property of the build: one added `COPY . .`, in any
+# of them, puts .env inside a published image. The context is also the build cache, so
+# the secret is on disk on whatever machine ran the build either way.
+#
+# Verified by planting a sentinel in .env and confirming it is absent from the build
+# context, with a negative control that removes this file and finds it.
+
+# credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials.json
+secrets.yaml
+
+# version control history
+.git
+.gitignore
+
+# local python environments and caches
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# node
+node_modules
+dashboard/node_modules
+dashboard/dist
+
+# agent working files, never part of an image
+.agent-work
+agent/logs
+training_job/metrics
+training_job/checkpoints
+training_job/data
+experiments
+
+# tests and CI, which no runtime image needs
+tests
+.github

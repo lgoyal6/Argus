@@ -92,6 +92,48 @@ argus/
 - Supabase project (free tier works)
 - Anthropic API key
 
+**There is no credential-free way to run the product.** Supabase is the only
+store `backend/db.py` knows how to talk to - there is no SQLite fallback and no
+demo mode - so without a project the dashboard loads and every panel on it is
+empty. What that actually looks like, if you try it with the placeholder `.env`:
+containers all stay up, `GET /` answers `{"status":"ok"}`, and `GET /runs/`
+answers `500` with `{"detail":"internal error","error_id":"..."}`. The cause is
+deliberately not in the response body; it is in `docker compose logs backend`,
+as `ConnectError` on a hostname that does not resolve.
+
+The Anthropic key buys the other half. The detector is arithmetic and needs
+nothing: with a placeholder key the training container still trains, the agent
+still polls, and `docker compose logs agent` still shows real detections
+(`{"event": "detection.anomaly", "type": "grad_explosion", "step": 420}` on a
+run left alone for four minutes). It is the *fix* that needs the key, and it
+does not degrade gracefully - the first detection raises
+`anthropic.AuthenticationError: 401 invalid x-api-key`, the traceback goes to
+the log, and the agent container exits 1 and stays exited, because nothing in
+`docker-compose.yml` restarts it.
+
+### What you can run without either account
+
+The test suite drives the real FastAPI app with `db.get_client` replaced by an
+in-memory store and `supabase.create_client` poisoned, so nothing can reach a
+project even by accident. It needs no Docker, no keys and about three seconds:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest
+```
+
+432 pass and one is a deliberate xfail. They cover the API contract and its
+error shaping, the z-score and CUSUM detector on synthetic series, the metrics
+tailer, the agent's sandbox and recovery behaviour, and the flat-layout import
+graph the container actually uses. It is the honest answer to "does this work"
+for anyone who is not going to create a Supabase project to find out.
+
+Run it from a `git clone`, not from a downloaded archive. `test_secret_lifecycle`
+asks git which files are tracked and which the ignore rules cover, so outside a
+checkout ten of its cases fail on `git` exiting 128 while reporting it as
+".env is not ignored by .gitignore", which is not what went wrong.
+
 ### 1. Clone and configure
 
 ```bash
@@ -165,6 +207,16 @@ docker compose up --build
 ### 4. Create a run and wire the agent
 
 ```bash
+bash scripts/reset_demo.sh
+```
+
+That is the whole step. It wipes metrics, resets `config.yaml`, creates a run,
+writes the returned id into `agent/loop.py` and restarts the agent.
+
+The same thing by hand, which is worth reading once because it shows where the
+run id actually lives:
+
+```bash
 curl -X POST http://localhost:8000/runs/ \
   -H "Content-Type: application/json" \
   -d '{"name":"run-1","config_path":"/app/config.yaml","metrics_file":"/app/metrics/metrics.jsonl","training_dir":"/app"}'
@@ -176,11 +228,12 @@ Copy the returned `id`, set `RUN_ID` in `agent/loop.py`, then restart the agent:
 docker compose restart agent
 ```
 
-Or use the reset script which does all of this automatically:
-
-```bash
-bash scripts/reset_demo.sh
-```
+`RUN_ID` is a constant in the source rather than an environment variable, so
+"configuring" the agent means editing a file the repository ships and the reset
+script rewrites. A clone starts with the previous run's uuid still in it, which
+is why an unconfigured agent posts to `/runs/<somebody else's id>/metrics/sync`
+every ten seconds and gets a 500. That is a known rough edge, not a broken
+install.
 
 ---
 

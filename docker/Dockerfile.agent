@@ -6,6 +6,8 @@ COPY agent/requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY agent/ .
+# Flat layout, as above: /app/obs.py beside /app/loop.py.
+COPY obs.py .
 COPY training_job/ ../training_job/
 
 CMD ["python3", "loop.py"]

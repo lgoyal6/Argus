@@ -1,7 +1,24 @@
 import json
 import yaml
-import subprocess
 from pathlib import Path
+
+# Flat in both layouts; see the note in agent/detector.py.
+import obs
+
+try:  # imported as a package by the tests, flat by agent/loop.py and the image
+    from agent.sandbox import (
+        SandboxError,
+        resolve_within,
+        validate_patches,
+        validate_tool_args,
+    )
+except ImportError:  # pragma: no cover - exercised only by the flat layout
+    from sandbox import (
+        SandboxError,
+        resolve_within,
+        validate_patches,
+        validate_tool_args,
+    )
 
 # ── tool definitions (passed to Anthropic API) ─────────────────────────────────
 TOOLS = [
@@ -78,7 +95,7 @@ TOOLS = [
 
 # ── tool implementations ───────────────────────────────────────────────────────
 def read_config(config_path):
-    path = Path(config_path)
+    path = resolve_within(config_path)
     if not path.exists():
         return {"error": f"config not found at {config_path}"}
     with open(path, "r") as f:
@@ -86,7 +103,12 @@ def read_config(config_path):
 
 
 def read_metrics(metrics_file, last_n=20):
-    path = Path(metrics_file)
+    path = resolve_within(metrics_file)
+    try:
+        last_n = int(last_n)
+    except (TypeError, ValueError):
+        raise SandboxError("last_n must be an integer")
+    last_n = max(1, min(last_n, 1000))  # bound the read the model can ask for
     if not path.exists():
         return {"error": f"metrics file not found at {metrics_file}"}
     with open(path, "r") as f:
@@ -96,7 +118,8 @@ def read_metrics(metrics_file, last_n=20):
 
 
 def patch_config(config_path, patches):
-    path = Path(config_path)
+    path = resolve_within(config_path)
+    validate_patches(patches)
     if not path.exists():
         return {"error": f"config not found at {config_path}"}
 
@@ -122,27 +145,106 @@ def patch_config(config_path, patches):
     return {"status": "patched", "changes": applied}
 
 
-def rerun_training(training_dir, max_steps=50):
+# The training server is the agent's one synchronous dependency, and it is the one that
+# stalls: the handler answers before its subprocess does anything, and this call's
+# timeout is much shorter than a training run. Classifying the failure at the call site
+# is what turns "the recovery did not work" into "the training server did not answer in
+# 10s", which is a different problem with a different fix.
+TRAINING_SERVER = "http://training:8001/rerun"
+REQUEST_TIMEOUT_S = 10
+
+
+def _classify(exc):
+    """Which kind of dependency failure this was, from a closed set.
+
+    A closed set is what lets the outcome be a metric label at all. The exception's
+    own message is not a label and not an attribute: it carries a URL, and on some
+    clients credentials, so it goes in the log body where obs.scrub_text sees it.
+    """
+    name = type(exc).__name__
+    if "Timeout" in name:
+        return "timeout"
+    if "ConnectionError" in name or "ConnectTimeout" in name:
+        return "connection"
+    if "HTTPError" in name or "Status" in name:
+        return "http_error"
+    return "connection"
+
+
+def rerun_training(training_dir, max_steps=50, attempt_id=None):
     import requests
+
+    resolve_within(training_dir)
     try:
-        response = requests.post(
-            "http://training:8001/rerun",
-            json={"max_steps": max_steps},
-            timeout=10
-        )
-        return {"status": "started", "response": response.json()}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+        max_steps = int(max_steps)
+    except (TypeError, ValueError):
+        raise SandboxError("max_steps must be an integer")
+    if not (1 <= max_steps <= 10000):
+        raise SandboxError(f"max_steps={max_steps} outside the permitted range [1, 10000]")
+    with obs.bind(attempt_id=attempt_id):
+        with obs.span("recovery.rerun_request", dependency="training_server",
+                      max_steps=max_steps, timeout_s=REQUEST_TIMEOUT_S) as span:
+            try:
+                response = requests.post(
+                    TRAINING_SERVER,
+                    # The attempt id is the idempotency key. This request's timeout is far
+                    # shorter than a training run, so a retry after a lost response is normal;
+                    # without the key it would start a second trainer appending to the same
+                    # metrics file, and two interleaved runs make the stream unreadable.
+                    json={"max_steps": max_steps, "attempt_id": attempt_id},
+                    timeout=REQUEST_TIMEOUT_S
+                )
+            except Exception as e:
+                reason = _classify(e)
+                # The exception is swallowed and returned as a tool result, so the span
+                # has to be told; otherwise its end record claims outcome="ok".
+                span.failed(reason)
+                obs.incr("argus_dependency_calls_total",
+                         dependency="training_server", outcome=reason)
+                obs.log("recovery.rerun_failed", level="error",
+                        dependency="training_server", reason=reason,
+                        error_type=type(e).__name__, detail=str(e),
+                        timeout_s=REQUEST_TIMEOUT_S)
+                return {"status": "error", "error": str(e)}
+            obs.incr("argus_dependency_calls_total",
+                     dependency="training_server", outcome="ok")
+            # "requested", never "started". This is an HTTP response from a handler that
+            # returns before its subprocess has done anything, so the most it can honestly
+            # attest to is that the request was accepted. Whether a trainer ran, and
+            # whether it fixed anything, is settled by agent/attempt.py against the
+            # metrics stream - not here.
+            return {"status": "requested", "response": response.json()}
 
 # ── tool dispatcher ────────────────────────────────────────────────────────────
-def run_tool(tool_name, tool_input):
-    if tool_name == "read_config":
-        return read_config(**tool_input)
-    elif tool_name == "read_metrics":
-        return read_metrics(**tool_input)
-    elif tool_name == "patch_config":
-        return patch_config(**tool_input)
-    elif tool_name == "rerun_training":
-        return rerun_training(**tool_input)
-    else:
-        return {"error": f"unknown tool: {tool_name}"}
+_HANDLERS = {
+    "read_config": read_config,
+    "read_metrics": read_metrics,
+    "patch_config": patch_config,
+    "rerun_training": rerun_training,
+}
+
+
+# Arguments the caller injects, which the model may not supply. attempt_id is an
+# idempotency key: letting model output choose it would let a retry be laundered into
+# a fresh launch, which is the thing the key exists to prevent.
+_INJECTED = {"rerun_training": "attempt_id"}
+
+
+def run_tool(tool_name, tool_input, attempt_id=None):
+    """Dispatch one tool call, refusing anything outside the agent's boundary.
+
+    A refusal is returned as a normal tool result rather than raised: the model
+    should see "you may not do that" and pick a different action, not crash the
+    recovery loop. The refusal text names the boundary so the reason is auditable
+    after the fact.
+    """
+    try:
+        # Validated before injection, so the allowlist still describes exactly what
+        # the model is permitted to send.
+        validate_tool_args(tool_name, tool_input)
+        kwargs = dict(tool_input)
+        if _INJECTED.get(tool_name) == "attempt_id":
+            kwargs["attempt_id"] = attempt_id
+        return _HANDLERS[tool_name](**kwargs)
+    except SandboxError as e:
+        return {"error": f"refused: {e}", "refused": True}
