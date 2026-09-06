@@ -1,0 +1,7 @@
+# Only the model-comparison harness needs these. The episode generator, the split and
+# the feature extraction are stdlib, so tests/test_experiment_split.py checks the
+# integrity of the experiment without any of this installed.
+mlflow>=3.16.0
+scikit-learn>=1.9.0
+numpy>=2.5.2
+pandas>=3.0.5
