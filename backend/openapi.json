@@ -218,10 +218,14 @@
         "additionalProperties": false,
         "properties": {
           "config_path": {
+            "minLength": 1,
+            "pattern": "\\S",
             "title": "Config Path",
             "type": "string"
           },
           "metrics_file": {
+            "minLength": 1,
+            "pattern": "\\S",
             "title": "Metrics File",
             "type": "string"
           },
@@ -230,6 +234,8 @@
             "type": "string"
           },
           "training_dir": {
+            "minLength": 1,
+            "pattern": "\\S",
             "title": "Training Dir",
             "type": "string"
           }
@@ -363,6 +369,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the request body could not be decoded"
           },
           "422": {
             "content": {
@@ -584,6 +600,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the request body could not be decoded"
           },
           "404": {
             "content": {
@@ -809,6 +835,11 @@
             "name": "status",
             "required": true,
             "schema": {
+              "enum": [
+                "running",
+                "completed",
+                "failed"
+              ],
               "title": "Status",
               "type": "string"
             }

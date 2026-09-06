@@ -44,6 +44,26 @@ class ErrorResponse(BaseModel):
     error_id: str | None = None
 
 
+class InternalError(HTTPException):
+    """A 500 whose wire body is the shape `ErrorResponse` declares.
+
+    `HTTPException(500, detail={...})` looks right in the source and is wrong on the
+    wire: FastAPI's default handler renders any HTTPException as `{"detail": <detail>}`,
+    so a dict detail arrives nested as `{"detail": {"detail": ..., "error_id": ...}}`.
+    The committed contract declares `detail` to be a string and `error_id` to sit
+    beside it, so every 500 the service returned violated its own published schema and
+    a client following the document looked for `error_id` at the top level and never
+    found it. Schemathesis found this by validating error bodies against the spec, which
+    is the one thing the hand-rolled corpus never did.
+
+    `main.py` registers a handler for this class that writes the flat shape.
+    """
+
+    def __init__(self, error_id: str):
+        super().__init__(status_code=500, detail="internal error")
+        self.error_id = error_id
+
+
 def not_found(what: str = "run not found") -> HTTPException:
     return HTTPException(status_code=404, detail=what)
 
@@ -74,10 +94,7 @@ def internal_error(exc: BaseException, operation: str) -> HTTPException:
         error_type=type(exc).__name__,
         detail=str(exc),
     )
-    return HTTPException(
-        status_code=500,
-        detail={"detail": "internal error", "error_id": error_id},
-    )
+    return InternalError(error_id)
 
 
 # Declared on the routes so the committed OpenAPI document describes the failure shapes
@@ -92,12 +109,22 @@ _BAD_REQUEST = {400: {"model": ErrorResponse,
                       "description": "the request was well formed but not permitted"}}
 _CONFLICT = {409: {"model": ErrorResponse,
                    "description": "the path and the body address different runs"}}
+# Starlette answers 400, not 422, when the request body is not decodable at all - bytes
+# that are not valid UTF-8 never reach pydantic, so there is no validation error to
+# report and the body is rejected before the route is entered. The routes that take a
+# body therefore have a reachable 400 that the document did not declare. Every
+# hand-written malformed body in tests/test_api_generated_inputs.py is valid UTF-8 and
+# lands on 422, which is why the corpus never saw this and Schemathesis did.
+_UNPARSEABLE = {400: {"model": ErrorResponse,
+                      "description": "the request body could not be decoded"}}
 
 # Routes that do not resolve a run.
 COLLECTION_RESPONSES = dict(_SERVER)
+# Routes that do not resolve a run but do take a body.
+COLLECTION_WRITE_RESPONSES = {**_UNPARSEABLE, **_SERVER}
 # Routes scoped to one run.
 ERROR_RESPONSES = {**_NOT_FOUND, **_SERVER}
 # PATCH /runs/{id}/status also rejects a status outside the permitted set.
 STATUS_RESPONSES = {**_BAD_REQUEST, **_NOT_FOUND, **_SERVER}
 # POST /runs/{id}/decisions also rejects a body that names a different run.
-DECISION_WRITE_RESPONSES = {**_NOT_FOUND, **_CONFLICT, **_SERVER}
+DECISION_WRITE_RESPONSES = {**_UNPARSEABLE, **_NOT_FOUND, **_CONFLICT, **_SERVER}

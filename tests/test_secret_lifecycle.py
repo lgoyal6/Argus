@@ -178,8 +178,10 @@ def test_an_api_failure_does_not_relay_exception_text_to_the_caller(client, stor
     assert "/Users/" not in body, f"a host path reached the caller: {body}"
     assert "RuntimeError" not in body
     # What the caller does get: a stable shape and a correlation id, so a report is
-    # actionable without being a disclosure.
-    payload = r.json()["detail"]
+    # actionable without being a disclosure. The shape is flat because that is what
+    # the committed contract declares for 500; it used to be nested one level deeper,
+    # which matched no schema and hid error_id from any client reading the document.
+    payload = r.json()
     assert payload["detail"] == "internal error"
     assert len(payload["error_id"]) == 12
 
@@ -191,7 +193,7 @@ def test_the_correlation_id_in_the_response_matches_the_one_in_the_log(client, s
                         lambda: (_ for _ in ()).throw(RuntimeError("boom")))
     with obs.capture() as records:
         r = client.get("/runs/")
-    error_id = r.json()["detail"]["error_id"]
+    error_id = r.json()["error_id"]
     logged = [rec for rec in records if rec["event"] == "api.request_failed"]
     assert len(logged) == 1
     assert logged[0]["error_id"] == error_id
