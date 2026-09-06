@@ -8,10 +8,24 @@ __pycache__/
 .venv/
 venv/
 
-# env
+# env and key material
+# `.env` alone left .env.local, .env.production and every other variant tracked, which
+# is the file people actually create when they want a second set of credentials. Six
+# commits reachable from origin/main already carry a live Supabase JWT and an Anthropic
+# key in .env.example; the pattern below is what stops the next one.
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials.json
+secrets.yaml
 
 # logs
 training_job/metrics/
 agent/logs/
 training_job/checkpoints/
+
+# Schemathesis keeps a local cache of shrunk failing cases here.
+.schemathesis/
