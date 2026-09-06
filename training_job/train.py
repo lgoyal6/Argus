@@ -150,6 +150,5 @@ def train(max_steps=None):
             print(f"checkpoint saved at epoch {epoch+1}")
 
 if __name__ == "__main__":
-    import sys
-    max_steps = int(sys.argv[1]) if len(sys.argv) > 1 else None
-    train(max_steps=max_steps)
+    from cli import parse_args
+    train(max_steps=parse_args().max_steps)
