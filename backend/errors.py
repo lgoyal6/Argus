@@ -109,6 +109,13 @@ _BAD_REQUEST = {400: {"model": ErrorResponse,
                       "description": "the request was well formed but not permitted"}}
 _CONFLICT = {409: {"model": ErrorResponse,
                    "description": "the path and the body address different runs"}}
+# The run exists; the file its row points at does not. This was a 404 with a different
+# detail string from the 404 for an unknown run, which made the refusal an existence
+# oracle: POST the sync route at an id and the body tells you whether that run is real.
+# Splitting the two conditions by status is what lets 404 mean exactly one thing and
+# carry exactly one body.
+_MISSING_FILE = {409: {"model": ErrorResponse,
+                       "description": "the run exists but its metrics file is not readable"}}
 # Starlette answers 400, not 422, when the request body is not decodable at all - bytes
 # that are not valid UTF-8 never reach pydantic, so there is no validation error to
 # report and the body is rejected before the route is entered. The routes that take a
@@ -128,3 +135,5 @@ ERROR_RESPONSES = {**_NOT_FOUND, **_SERVER}
 STATUS_RESPONSES = {**_BAD_REQUEST, **_NOT_FOUND, **_SERVER}
 # POST /runs/{id}/decisions also rejects a body that names a different run.
 DECISION_WRITE_RESPONSES = {**_UNPARSEABLE, **_NOT_FOUND, **_CONFLICT, **_SERVER}
+# POST /runs/{id}/metrics/sync also refuses a run whose metrics file is unreadable.
+SYNC_RESPONSES = {**_NOT_FOUND, **_MISSING_FILE, **_SERVER}

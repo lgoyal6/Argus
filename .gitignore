@@ -26,3 +26,6 @@ secrets.yaml
 training_job/metrics/
 agent/logs/
 training_job/checkpoints/
+
+# Schemathesis keeps a local cache of shrunk failing cases here.
+.schemathesis/

@@ -200,3 +200,57 @@ def test_the_permitted_statuses_are_published_in_the_contract():
     params = SPEC["paths"]["/runs/{run_id}/status"]["patch"]["parameters"]
     status = next(p for p in params if p["name"] == "status")
     assert status["schema"].get("enum") == ["running", "completed", "failed"], status
+
+
+# ── third round: found after the second round of fixes landed ──────────────────
+
+@pytest.mark.parametrize("template,path", [
+    ("/runs/{run_id}/decisions", f"/runs/{SEED_RUN_ID}/decisions"),
+    ("/runs/{run_id}/metrics", f"/runs/{SEED_RUN_ID}/metrics"),
+])
+def test_the_limit_parameter_does_not_declare_a_null_it_cannot_accept(client, template, path):
+    """Schemathesis `positive_data_acceptance` on both paginated reads.
+
+    `limit: int | None` renders as `anyOf: [integer, null]`, so the document said null
+    was a permitted value while `?limit=null` answered 422. There is no query string a
+    client can write that means null; the parameter is optional, not nullable. The
+    corpus never sent `limit` at all - it varies request *bodies* - so it could not
+    have found a defect that lives in a query parameter's declared type.
+    """
+    schema = next(p for p in SPEC["paths"][template]["get"]["parameters"]
+                  if p["name"] == "limit")["schema"]
+    assert schema.get("type") == "integer", schema
+    assert "anyOf" not in schema, schema
+    assert schema.get("minimum") == 1 and schema.get("maximum") == 5000, schema
+
+    assert client.get(path).status_code == 200
+    assert client.get(path, params={"limit": 2}).status_code == 200
+    # Still refused, and now correctly: the contract no longer promises it.
+    assert client.get(f"{path}?limit=null").status_code == 422
+
+
+def test_a_run_whose_metrics_file_is_missing_is_not_reported_as_a_missing_run(client, store):
+    """Schemathesis `ensure_resource_availability` on `POST /runs/{id}/metrics/sync`.
+
+    A run created one request earlier answered 404 to its own sync call, because the
+    route reused `not_found` for a condition that is not a missing run: the run was
+    resolved, and its `metrics_file` was what could not be read. One status carrying
+    two meanings on one route is a contract defect on its own, and the two detail
+    strings that distinguished them made it an existence oracle as well; see
+    tests/test_api_authorization.py for that half.
+
+    The corpus calls sync, but only ever against the seeded run and only asserting the
+    status is one the contract declares - and 404 was declared - so a right status for
+    the wrong reason passed. Composing create-then-sync is what exposed it.
+    """
+    r = client.post("/runs/", json={"name": "n", "config_path": "c",
+                                    "metrics_file": "/nonexistent/nope.jsonl",
+                                    "training_dir": "t"})
+    assert r.status_code == 200, r.text
+    run_id = r.json()["id"]
+    assert client.get(f"/runs/{run_id}").status_code == 200, "the run must exist"
+
+    s = client.post(f"/runs/{run_id}/metrics/sync")
+    assert s.status_code == 409, f"the run exists; {s.status_code} says it does not"
+    assert s.status_code in _declared("/runs/{run_id}/metrics/sync", "POST"), \
+        f"409 is undeclared: {sorted(_declared('/runs/{run_id}/metrics/sync', 'POST'))}"

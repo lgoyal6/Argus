@@ -213,3 +213,60 @@ def test_a_real_other_run_is_distinguishable_from_an_invented_one(client, suffix
     assert real_other.status_code == 200
     assert invented.status_code == 404
     assert real_other.content != invented.content
+
+
+def test_a_write_entry_point_refuses_a_real_id_and_an_invented_one_identically(client, store):
+    """The oracle C03 names, closed on the one route where it was open.
+
+    `POST /runs/{id}/metrics/sync` answered 404 twice with two different bodies:
+    `{"detail":"run not found"}` for an id that was never created, and
+    `{"detail":"metrics file not found"}` for a real run whose file is absent - which
+    every seeded run's is. A caller with no credentials could therefore sweep run ids
+    and read existence straight off the refusal body. The two conditions now differ by
+    status, so a 404 from this route means exactly one thing and carries exactly one
+    body regardless of which id produced it.
+
+    The seeded run is used deliberately: its `metrics_file` points at a path the
+    fixture never creates, so it is precisely the case that used to leak.
+    """
+    assert any(r["id"] == SEED_RUN_ID for r in store.tables["runs"])
+
+    real = client.post(f"/runs/{SEED_RUN_ID}/metrics/sync")
+    invented = client.post(f"/runs/{INVENTED_RUN_ID}/metrics/sync")
+    not_an_id = client.post(f"/runs/{NOT_AN_ID}/metrics/sync")
+
+    assert real.status_code == 409, f"a real run reported as missing: {real.text}"
+    assert invented.status_code == not_an_id.status_code == 404, \
+        (invented.status_code, not_an_id.status_code)
+    assert invented.content == not_an_id.content, (invented.content, not_an_id.content)
+
+
+@pytest.mark.parametrize("path_for", [
+    lambda rid: (f"/runs/{rid}/decisions", "post"),
+    lambda rid: (f"/runs/{rid}/status", "patch"),
+    lambda rid: (f"/runs/{rid}/metrics/sync", "post"),
+])
+def test_no_write_entry_point_distinguishes_two_absent_ids(client, path_for):
+    """Every write entry point, both kinds of absent identifier, byte-identical.
+
+    A well-formed uuid that was never created and a string that is not an id at all
+    must be refused the same way. If one produced a 404 and the other a 422, the
+    refusal would tell a caller which of its guesses had the right shape.
+    """
+    a_path, method = path_for(INVENTED_RUN_ID)
+    b_path, _ = path_for(NOT_AN_ID)
+    kwargs = {}
+    if method == "post" and a_path.endswith("/decisions"):
+        kwargs["json"] = {"id": "x", "run_id": INVENTED_RUN_ID, "timestamp": 1.0,
+                          "anomaly_types": [], "tools_used": [], "agent_response": "x",
+                          "fixed": None, "status": None}
+    elif method == "patch":
+        kwargs["params"] = {"status": "completed"}
+
+    a = client.request(method.upper(), a_path, **kwargs)
+    if "json" in kwargs:
+        kwargs["json"] = {**kwargs["json"], "run_id": NOT_AN_ID}
+    b = client.request(method.upper(), b_path, **kwargs)
+
+    assert a.status_code == b.status_code == 404, (a.status_code, b.status_code)
+    assert a.content == b.content, (a.content, b.content)

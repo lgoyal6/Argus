@@ -13,8 +13,10 @@ MAX_PAGE = 5000
 @router.get("/{run_id}/decisions", response_model=list[Decision], responses=ERROR_RESPONSES)
 def get_decisions(
     run_id: str,
-    limit: int | None = Query(None, ge=1, le=MAX_PAGE,
-                              description="maximum rows to return; omit for all of them"),
+    # See routes/metrics.py: optional is not nullable, and `int | None` published a
+    # `null` branch the query parser rejects.
+    limit: int = Query(None, ge=1, le=MAX_PAGE,
+                       description="maximum rows to return; omit for all of them"),
     offset: int = Query(0, ge=0, description="rows to skip, newest first"),
 ):
     try:
