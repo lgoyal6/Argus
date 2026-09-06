@@ -2,6 +2,11 @@ import json
 from pathlib import Path
 from statistics import mean, stdev
 
+# obs.py sits at the repository root and is copied into /app by docker/Dockerfile.agent,
+# so it is flat beside this module in the image. tests/test_flat_layout.py enforces the
+# COPY, because losing it starts the container and kills it on the first import.
+import obs
+
 
 # ── thresholds ─────────────────────────────────────────────────────────────────
 GRAD_EXPLOSION_THRESHOLD = 10  # hard threshold on grad norm
@@ -18,30 +23,93 @@ OVERFIT_TREND_STEPS = 5        # gap must be increasing over this many steps
 
 
 # ── read metrics file ──────────────────────────────────────────────────────────
-def load_metrics(metrics_file):
+# The deepest lookback any detector below needs: rolling_zscore reads
+# ROLLING_WINDOW values plus the sample under test, and every other check is
+# shallower. Reading more than this per cycle is work that grows with the run
+# while the answer does not.
+REQUIRED_HISTORY = max(ROLLING_WINDOW + 1, VAL_PLATEAU_STEPS, OVERFIT_TREND_STEPS)
+
+
+def _tail_lines(path, count, chunk_size=8 * 1024):
+    """Last `count` non-empty lines, read backwards from the end of the file.
+
+    Reading the whole file to look at the last twenty rows makes each detection
+    cycle cost O(run length); by step 10,000 that is 10,000 rows parsed to decide
+    something the last twenty already determine. One 8 KiB block holds far more
+    than REQUIRED_HISTORY rows at any realistic row size; the loop only reads a
+    second block if it does not.
+    """
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        end = f.tell()
+        blocks = []
+        newlines = 0
+        # One extra newline: the first line in the window is usually partial.
+        while end > 0 and newlines <= count:
+            size = min(chunk_size, end)
+            end -= size
+            f.seek(end)
+            block = f.read(size)
+            newlines += block.count(b"\n")
+            blocks.append(block)
+    data = b"".join(reversed(blocks))
+    lines = [l.strip() for l in data.decode("utf-8", "replace").splitlines() if l.strip()]
+    return lines[-count:]
+
+
+def load_metrics(metrics_file, history=REQUIRED_HISTORY):
+    """Recent metric entries, newest last.
+
+    history=None reads the whole file, which the CLI and any caller that wants a
+    full view can still ask for; the detectors do not need it.
+    """
     path = Path(metrics_file)
     if not path.exists():
         return []
-    with open(path, "r") as f:
-        lines = [l.strip() for l in f.readlines() if l.strip()]
-    return [json.loads(l) for l in lines]
+    if history is None:
+        with open(path, "r") as f:
+            lines = [l.strip() for l in f.readlines() if l.strip()]
+    else:
+        lines = _tail_lines(path, history)
+    out = []
+    for line in lines:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            # A torn last line (the trainer mid-write) or a corrupt record must
+            # not stop detection on the records that did parse.
+            continue
+    return out
 
 
 # ── statistical helpers ────────────────────────────────────────────────────────
-def rolling_zscore(values, window=20):
-    """Return the z-score of the last value against the rolling window mean/std.
+def rolling_zscore(values, window=ROLLING_WINDOW):
+    """Z-score of the last value against the window of values BEFORE it.
 
-    Requires at least 2 values in the window; returns None if there is
-    insufficient data or zero standard deviation.
+    The sample under test is deliberately excluded from its own reference
+    statistics. Including it - as this did originally - bounds the achievable
+    |z| at (n-1)/sqrt(n) no matter how extreme the anomaly. With window=20 that
+    ceiling is 4.249, which left GRAD_EXPLOSION_ZSCORE (4.0) reachable only in a
+    6% sliver of its range and mathematically unreachable below 19 samples; a 5x
+    jump on two samples scored 0.707. Excluding the sample removes the bound, so
+    a bigger anomaly scores higher instead of saturating.
+
+    Returns None when there is not enough history, and when the reference window
+    has zero spread. A flat history genuinely cannot say whether the next value is
+    anomalous, and inventing a score there manufactures alarms on constant metrics
+    (a frozen gradient, or a metric the trainer has stopped updating). The hard
+    thresholds still cover those cases.
     """
-    window_vals = values[-window:] if len(values) >= window else values[:]
-    if len(window_vals) < 2:
+    if len(values) < 2:
         return None
-    mu = mean(window_vals)
-    sigma = stdev(window_vals)
+    reference = values[-(window + 1):-1]
+    if len(reference) < 2:
+        return None
+    mu = mean(reference)
+    sigma = stdev(reference)
     if sigma == 0:
         return None
-    return (window_vals[-1] - mu) / sigma
+    return (values[-1] - mu) / sigma
 
 
 # ── individual detectors ───────────────────────────────────────────────────────
@@ -168,26 +236,47 @@ def detect_overfitting(metrics):
 
 
 # ── main detector ──────────────────────────────────────────────────────────────
-def detect_anomalies(metrics_file):
-    metrics = load_metrics(metrics_file)
+CHECKS = (
+    detect_loss_spike,
+    detect_grad_explosion,
+    detect_val_plateau,
+    detect_overfitting,
+)
+
+
+def detect_anomalies_in(metrics):
+    """Run every check over metric rows already in hand.
+
+    Split out from detect_anomalies so a caller holding a specific window can ask
+    about that window. agent/attempt.py needs exactly this: to decide whether a
+    recovery corrected anything it has to re-run the triggering check over the rows
+    written AFTER the attempt, not over whatever the file happens to end with.
+    """
     if not metrics:
         return []
+    return [result for check in CHECKS if (result := check(metrics))]
 
-    anomalies = []
 
-    checks = [
-        detect_loss_spike,
-        detect_grad_explosion,
-        detect_val_plateau,
-        detect_overfitting,
-    ]
+def detect_anomalies(metrics_file):
+    """One detection cycle over the tail of the metrics file.
 
-    for check in checks:
-        result = check(metrics)
-        if result:
-            anomalies.append(result)
+    Instrumented here rather than in detect_anomalies_in because agent/attempt.py calls
+    that one to re-check the triggering anomaly AFTER a recovery. Counting both through
+    the same metric would mix "the system found a fault" with "the verifier looked
+    again", and the ratio between those two is the number the recovery work exists to
+    report honestly.
 
-    return anomalies
+    The anomaly dictionaries carry train_loss, the z-score and a rendered description.
+    None of that goes into an attribute: those values are already in the metrics stream,
+    which is the copy an auditor should be reading. Only the type and the step travel,
+    and the type is the sole label because it is the only field with a closed value set.
+    """
+    with obs.span("detection.cycle", metrics_file_present=Path(metrics_file).exists()):
+        results = detect_anomalies_in(load_metrics(metrics_file))
+        for anomaly in results:
+            obs.incr("argus_detection_anomalies_total", type=anomaly["type"])
+            obs.log("detection.anomaly", type=anomaly["type"], step=anomaly.get("step"))
+        return results
 
 
 # ── cli ────────────────────────────────────────────────────────────────────────
