@@ -379,6 +379,38 @@ def test_an_oversized_explicit_limit_is_refused_before_any_query_runs():
     assert r.status_code == 413, r.text
 
 
+def test_explicit_pages_are_bounded_in_the_database_query():
+    """A small API page must not fetch the whole table before slicing it."""
+    _, _, db, client = build({"ARGUS_MAX_WORK_UNITS": 100}, metrics_rows=250)
+    seen_ranges = []
+    real_table = client.table
+
+    def table(name):
+        query_table = real_table(name)
+        real_select = query_table.select
+
+        def select(*args, **kwargs):
+            query = real_select(*args, **kwargs)
+            real_range = query.range
+
+            def record_range(start, end):
+                seen_ranges.append((name, start, end))
+                return real_range(start, end)
+
+            query.range = record_range
+            return query
+
+        query_table.select = select
+        return query_table
+
+    client.table = table
+
+    rows = db.get_metrics(RUN_ID, limit=10, offset=20)
+
+    assert [row["step"] for row in rows] == list(range(20, 30))
+    assert seen_ranges == [("metrics", 20, 29)]
+
+
 def test_a_limit_above_the_published_maximum_is_refused_by_the_contract():
     """The other half of the same bound, and the reason the number above is 1000.
 
