@@ -29,6 +29,8 @@ from agent.attempt import (
     TIMED_OUT,
     Attempt,
     load_ledger,
+    reconcile_open_attempts,
+    resume_attempt,
 )
 
 
@@ -240,6 +242,74 @@ os.kill(os.getpid(), signal.SIGKILL)  # uncatchable: no flush, no atexit, no unw
     assert recovered["fixed"] is False
     assert recovered["approved_action"]["changes"] == {"training.gradient_clip": 0.5}
     assert recovered["baseline"]["row_count"] == 21
+
+    # The trainer keeps writing after the worker dies. A fresh process runs the
+    # same reconciliation hook used by poll_once and advances the original
+    # attempt to its evidence-backed terminal state.
+    write(metrics, [row(s, grad_norm=1.0) for s in (10, 20, 30)])
+    restart = f"""
+import sys
+sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
+from agent.attempt import reconcile_open_attempts
+
+attempts = reconcile_open_attempts("run-1", {str(metrics)!r}, ledger_path={str(ledger)!r})
+assert len(attempts) == 1
+assert attempts[0].fixed
+"""
+    restarted = subprocess.run(
+        [sys.executable, "-c", restart], capture_output=True, text=True
+    )
+    assert restarted.returncode == 0, restarted.stderr
+
+    (terminal,) = load_ledger(ledger)
+    assert terminal["attempt_id"] == recovered["attempt_id"]
+    assert terminal["outcome"] == CORRECTED
+    assert terminal["terminal"] == RESOLVED
+    assert terminal["fixed"] is True
+
+
+def test_an_interrupted_workflow_resumes_the_same_attempt_and_observes_progress(
+    tmp_path, metrics
+):
+    trigger = {"type": "grad_explosion", "step": 21}
+    ledger = tmp_path / "attempts.jsonl"
+    original = Attempt("run-1", trigger, ledger_path=ledger)
+    original.capture_baseline(metrics)
+    original.record_action({"tool": "patch_config", "changes": {"training.gradient_clip": 0.5}})
+    original_id = original.attempt_id
+
+    del original
+    write(metrics, [row(s, grad_norm=1.0) for s in (10, 20, 30)])
+    reconciled = reconcile_open_attempts(
+        "run-1", metrics, ledger_path=ledger
+    )
+    resumed = reconciled[0]
+
+    assert resumed is not None
+    assert resumed.attempt_id == original_id
+    assert resumed.approved_action["tool"] == "patch_config"
+    assert resumed.observe(metrics) == CORRECTED
+    assert resumed.terminal == RESOLVED
+    assert len(load_ledger(ledger)) == 1
+
+
+def test_terminal_attempt_is_not_resumed(tmp_path, metrics):
+    trigger = {"type": "grad_explosion", "step": 21}
+    ledger = tmp_path / "attempts.jsonl"
+    finished = Attempt("run-1", trigger, ledger_path=ledger)
+    finished.capture_baseline(metrics)
+    finished.cancel("operator stopped it")
+
+    assert resume_attempt("run-1", trigger, ledger_path=ledger) is None
+
+
+def test_agent_loop_uses_the_durable_resume_path():
+    source = (Path(__file__).resolve().parents[1] / "agent" / "loop.py").read_text()
+    assert "resume_attempt(RUN_ID, anomalies[0])" in source
+    assert "reconcile_open_attempts(RUN_ID, METRICS_FILE)" in source
+    fixed_guard = source.index("if attempt.fixed:")
+    model_client = source.index("client = anthropic.Anthropic")
+    assert fixed_guard < model_client
 
 
 def test_an_outcome_never_walks_back_down_the_ladder(attempt, metrics):
