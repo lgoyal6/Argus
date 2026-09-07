@@ -91,3 +91,22 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest tests/test_secret_lifecycle.py tests/test_observability.py tests/test_flat_layout.py -v
+
+  # The model stack, which the other jobs deliberately do not install. Two things live
+  # here that nothing lighter can check: activation goes through the artifact guard
+  # rather than around it, and the drift monitor catches one seeded shift while
+  # provably missing another. tests/test_drift_eval.py skips itself when scikit-learn
+  # is absent, so without this job it would quietly stop running on every push.
+  model-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt -r experiments/requirements.txt
+      - run: python -m pytest tests/test_artifact_guard.py tests/test_drift_eval.py -v -rs | tee /tmp/model-quality.txt
+      # A skip in THIS job is the exact failure it exists to prevent: it would mean
+      # the model stack did not install and the suite passed by not running. No count
+      # is hardcoded, so adding a test does not break this.
+      - run: "! grep -qE '^SKIPPED|[0-9]+ skipped' /tmp/model-quality.txt"
