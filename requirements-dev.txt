@@ -22,6 +22,3 @@ opentelemetry-sdk>=1.44,<2
 # experiments/artifact_guard.py itself imports numpy lazily, inside the two checks
 # that read weights, so the module stays importable without it.
 numpy>=1.26
-# The data-only artifact guard tests execute the exported detector contract.
-# pandas is the only model-stack package that contract imports at runtime.
-pandas>=3.0.5

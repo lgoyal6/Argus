@@ -17,7 +17,12 @@ jobs:
       # No Supabase credentials here on purpose: everything under tests/ is the
       # logic that must hold without a network - the incremental ingest cursor,
       # the anomaly statistics, and the agent's tool boundary.
-      - run: python -m pytest tests/ -q
+      # The two model-stack files run below with their actual dependencies and
+      # a no-skips assertion. Keep this job bounded to the non-model suite.
+      - run: >-
+          python -m pytest tests/ -q
+          --ignore=tests/test_artifact_guard.py
+          --ignore=tests/test_drift_eval.py
 
   # The agent's tools are reachable from model output, and the model reads training
   # logs it does not control. This job is the one that must not silently stop
