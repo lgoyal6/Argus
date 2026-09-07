@@ -73,6 +73,7 @@ class _Query:
         self._on_conflict = on_conflict
         self._filters = []
         self._order = None
+        self._range = None
 
     def eq(self, col, val):
         self._filters.append((col, val))
@@ -80,6 +81,10 @@ class _Query:
 
     def order(self, col, desc=False):
         self._order = (col, desc)
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
         return self
 
     def _matching(self):
@@ -94,6 +99,9 @@ class _Query:
             if self._order:
                 col, desc = self._order
                 rows = sorted(rows, key=lambda r: r.get(col), reverse=desc)
+            if self._range is not None:
+                start, end = self._range
+                rows = rows[start:end + 1]
             return _Result(copy.deepcopy(rows))
         if self._op == "insert":
             items = self._payload if isinstance(self._payload, list) else [self._payload]

@@ -78,8 +78,14 @@ def get_runs(limit=None, offset=0):
         limit = min(limits.MAX_WORK_UNITS or DEFAULT_RUN_PAGE, DEFAULT_RUN_PAGE)
     limits.check_work(limit, "rows")
     client = get_client()
-    response = client.table("runs").select("*").order("created_at", desc=True).execute()
-    return _page(response.data, limit, offset)
+    response = (
+        client.table("runs")
+        .select("*")
+        .order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return response.data
 
 
 def get_run(run_id):
@@ -215,21 +221,6 @@ def insert_metrics(run_id, metrics_file):
             return {"inserted": len(rows)}
 
 
-def _page(rows, limit, offset):
-    """Slice a result set. `limit=None` means the whole series.
-
-    Applied here rather than pushed into the query because the ordering the callers
-    depend on is applied by the same query, and a range() pushed down would have to
-    reproduce it. The unbounded read is the pre-existing behaviour and stays the
-    default; see routes/metrics.py for why.
-    """
-    if offset:
-        rows = rows[offset:]
-    if limit is not None:
-        rows = rows[:limit]
-    return rows
-
-
 def _ingest_failure_reason(exc):
     """Bucket a sink failure into the closed set the metric label permits.
 
@@ -262,11 +253,18 @@ def get_metrics(run_id, limit=None, offset=0):
         # Checked before the query, so an oversized explicit ask costs nothing.
         limits.check_work(limit, "rows")
     client = get_client()
+    query = client.table("metrics").select("*").eq("run_id", run_id).order("step")
+    if limit is not None:
+        query = query.range(offset, offset + limit - 1)
+    elif limits.MAX_WORK_UNITS:
+        # Fetch one row past the cap so a whole-series request can be refused without
+        # first materialising an arbitrarily large result in the API process.
+        query = query.range(offset, offset + limits.MAX_WORK_UNITS)
     with obs.span("db.select", kind="client", dependency="supabase", table="metrics"):
-        response = client.table("metrics").select("*").eq("run_id", run_id).order("step").execute()
+        response = query.execute()
     if limit is None:
         limits.check_work(len(response.data), "rows")
-    return _page(response.data, limit, offset)
+    return response.data
 
 
 # ── decisions ──────────────────────────────────────────────────────────────────
@@ -306,5 +304,12 @@ def get_decisions(run_id, limit=None, offset=0):
         limit = min(limits.MAX_WORK_UNITS or DEFAULT_DECISION_PAGE, DEFAULT_DECISION_PAGE)
     limits.check_work(limit, "rows")
     client = get_client()
-    response = client.table("decisions").select("*").eq("run_id", run_id).order("timestamp", desc=True).execute()
-    return _page(response.data, limit, offset)
+    response = (
+        client.table("decisions")
+        .select("*")
+        .eq("run_id", run_id)
+        .order("timestamp", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    return response.data
