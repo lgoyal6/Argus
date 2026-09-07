@@ -18,4 +18,7 @@ RUN pip install fastapi uvicorn
 # here too; the requirements file carries it for anyone running train.py directly.
 RUN pip install "opentelemetry-sdk>=1.44,<2" "opentelemetry-exporter-otlp-proto-http>=1.44,<2"
 COPY training_job/ .
+# obs.py lives at the repository root and is flat in the image, beside train.py
+# and server.py, exactly as in the agent and backend images.
+COPY obs.py .
 CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port 8001 & python3 train.py"]

@@ -74,12 +74,34 @@ def load_metrics(metrics_file, history=REQUIRED_HISTORY):
     out = []
     for line in lines:
         try:
-            out.append(json.loads(line))
+            row, _ = obs.take_trace(json.loads(line))
+            out.append(row)
         except ValueError:
             # A torn last line (the trainer mid-write) or a corrupt record must
             # not stop detection on the records that did parse.
             continue
     return out
+
+
+def newest_trace_context(metrics_file):
+    """The parent context of the last row on the queue, if it carried one.
+
+    This is the consumer half of the hop. The agent is a different process from the
+    trainer and usually was not running when the row was written, so nothing is
+    inherited from an ambient context; the row itself is the only channel. Reading
+    the last row rather than all of them is deliberate: a detection cycle is
+    triggered by the newest sample, so that is the caller it belongs to.
+    """
+    path = Path(metrics_file)
+    if not path.exists():
+        return None
+    for line in reversed(_tail_lines(path, 1)):
+        try:
+            _, traceparent = obs.take_trace(json.loads(line))
+        except ValueError:
+            return None
+        return traceparent
+    return None
 
 
 # ── statistical helpers ────────────────────────────────────────────────────────
@@ -271,7 +293,9 @@ def detect_anomalies(metrics_file):
     which is the copy an auditor should be reading. Only the type and the step travel,
     and the type is the sole label because it is the only field with a closed value set.
     """
-    with obs.span("detection.cycle", metrics_file_present=Path(metrics_file).exists()):
+    with obs.span("detection.cycle", kind="consumer",
+                  parent=obs.inherited_or(newest_trace_context(metrics_file)),
+                  metrics_file_present=Path(metrics_file).exists()):
         results = detect_anomalies_in(load_metrics(metrics_file))
         for anomaly in results:
             obs.incr("argus_detection_anomalies_total", type=anomaly["type"])
