@@ -12,6 +12,11 @@ try:  # imported as a package by the tests, flat by the backend image
 except ImportError:  # pragma: no cover - exercised only by the flat layout
     from tailer import MetricsTailer
 
+try:  # same two layouts; see the note above
+    from backend.argus_secrets import get_secret
+except ImportError:  # pragma: no cover - exercised only by the flat layout
+    from argus_secrets import get_secret
+
 # obs.py lives at the repository root and is copied to /app by both Dockerfiles, so it
 # is flat in the image and importable from the repository root. It is not inside either
 # package, which is why this one needs no try/except.
@@ -19,11 +24,14 @@ import obs
 
 # ── client ─────────────────────────────────────────────────────────────────────
 def get_client() -> Client:
+    # SUPABASE_URL is not a credential and stays plain configuration. SUPABASE_KEY
+    # goes through the resolver: Secret Manager when ARGUS_SECRET_PROJECT is set, the
+    # environment otherwise. Nothing is memoised here, so a rotation takes effect on
+    # the next call rather than at the next restart.
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    if not url or not key:
-        raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment")
-    return create_client(url, key)
+    if not url:
+        raise ValueError("SUPABASE_URL must be set in environment")
+    return create_client(url, get_secret("SUPABASE_KEY"))
 
 
 # ── runs ───────────────────────────────────────────────────────────────────────

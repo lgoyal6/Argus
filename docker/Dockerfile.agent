@@ -6,6 +6,9 @@ COPY agent/requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY agent/ .
+# Owned by the backend and shared rather than duplicated; both images flatten onto
+# /app, so one file is enough. tests/test_flat_layout.py fails if this line goes.
+COPY backend/argus_secrets.py .
 # Flat layout, as above: /app/obs.py beside /app/loop.py.
 COPY obs.py .
 COPY training_job/ ../training_job/
