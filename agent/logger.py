@@ -12,10 +12,22 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
 # ── supabase ───────────────────────────────────────────────────────────────────
 from supabase import create_client
 
+try:  # imported as a package by the tests, flat by the agent image
+    from backend.argus_secrets import SecretNotConfigured, get_secret
+except ImportError:  # pragma: no cover - exercised only by the flat layout
+    from argus_secrets import SecretNotConfigured, get_secret
+
+
 def get_supabase():
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    if not url or not key:
+    if not url:
+        return None
+    try:
+        key = get_secret("SUPABASE_KEY")
+    except SecretNotConfigured:
+        # No credential configured at all: the caller already falls back to the local
+        # decision log. A Secret Manager denial is a different case and is left to
+        # propagate, because that one means the grant is wrong.
         return None
     return create_client(url, key)
 

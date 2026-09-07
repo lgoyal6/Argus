@@ -14,6 +14,12 @@ from prompts import SYSTEM_PROMPT, build_user_prompt
 from logger import log_decision
 from attempt import Attempt, TIMED_OUT
 import anthropic
+
+try:  # imported as a package by the tests, flat by the agent image
+    from backend.argus_secrets import get_secret
+except ImportError:  # pragma: no cover - exercised only by the flat layout
+    from argus_secrets import get_secret
+
 from dotenv import load_dotenv
 load_dotenv("../.env")
 # ── config ─────────────────────────────────────────────────────────────────────
@@ -27,7 +33,10 @@ COOLDOWN_STEPS = 500      # steps to wait before re-triggering the same anomaly 
 
 # ── agent call ─────────────────────────────────────────────────────────────────
 def run_agent(anomalies):
-    client = anthropic.Anthropic()
+    # The model key comes from the resolver rather than the ambient environment, so a
+    # deployed Argus reads it as its own workload identity instead of carrying it in
+    # the image.
+    client = anthropic.Anthropic(api_key=get_secret("ANTHROPIC_API_KEY"))
 
     # One attempt record per invocation, opened before anything is asked for. The
     # trigger is recorded now so the claim at the end can be checked against what
