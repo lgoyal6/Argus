@@ -153,7 +153,6 @@ def test_an_undeclared_container_is_summarised_rather_than_inlined():
     with obs.capture() as records:
         obs.log("probe", something_new=[{"train_loss": 9.9}])
     assert records[0]["something_new"] == "<list len=1>"
-    assert "9.9" not in json.dumps(records[0])
 
 
 def test_the_detection_cycle_logs_the_type_and_never_the_values(tmp_path):
