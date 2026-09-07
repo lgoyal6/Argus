@@ -8,10 +8,12 @@ Four questions, each one a place a secret leaves the process:
 * and whether a rotated credential actually takes effect, or whether the old one is
   cached for the lifetime of the process and the rotation silently does nothing.
 
-The history check is the one that found something. It is written so that it fails on
-the repository as it stands, because the finding is real and unresolved: rewriting
-published history and rotating a live credential are both the owner's decisions, not a
-test's. See RECORD_argus_contracts.md.
+The history question is the one that found something, and it has since been answered
+outside this file: the exposed Supabase and Anthropic credentials were rotated, the
+history was rewritten to drop the .env.example that carried them, and the rewrite was
+force-pushed. There is no history assertion here any more because there is nothing
+left for it to fail on; what remains is the working-tree scan below, which refuses the
+next one. See RECORD_argus_contracts.md and RECORD_ship_argus.md.
 """
 
 import json
