@@ -29,10 +29,8 @@ Every step happens BEFORE the production alias is touched.
   2. digest      - every file in the artifact matches a manifest recorded when
                    the artifact was reviewed. Byte size and sha256, no
                    tolerance.
-  3. no code     - the pickle's global references are read off the opcode
-                   stream, WITHOUT unpickling, and checked against a module
-                   allowlist. `os`, `subprocess`, `builtins.eval` and friends
-                   are refused here, before `load_model` is called at all.
+  3. no code     - activation accepts a data-only detector.json artifact and
+                   rejects pickle, Python, shared-library and executable files.
   4. schema      - the artifact's declared feature order and input columns
                    match the contract the caller indexes by. A permuted feature
                    order loads perfectly and then answers the wrong question.
@@ -88,9 +86,9 @@ ARTIFACT_SCHEMA: dict = {
     # What a prediction must look like coming back out.
     "output": {"dtype_kind": "i", "ndim": 1, "values": [0, 1]},
     # Files an artifact must contain to be considered complete.
-    "required_files": ["MLmodel", "python_model.pkl"],
+    "required_files": ["MLmodel", "detector.json"],
     # Provenance keys a registered version must carry as tags.
-    "required_provenance_tags": ["dataset_sha256", "kind"],
+    "required_provenance_tags": ["dataset_sha256", "code_revision", "run_id", "kind"],
 }
 
 
@@ -102,17 +100,9 @@ ARTIFACT_SCHEMA: dict = {
 # scaffolding, the mlflow pyfunc wrapper, numpy, sklearn, and `builtins.type`
 # for the reconstructed classes.
 ALLOWED_GLOBAL_PREFIXES: tuple = (
-    "cloudpickle",
-    "mlflow.",
-    "numpy",
-    "sklearn",
-    "scipy",
-    "pandas",
     "collections",
     "copyreg",
     "_codecs",
-    "experiments.",
-    "agent.",
     "__builtin__",
 )
 
@@ -357,10 +347,113 @@ def check_required_files(artifact_dir: str, schema: Mapping = ARTIFACT_SCHEMA) -
         raise ArtifactRejected(f"{artifact_dir}: artifact is missing {missing}")
 
 
+_EXECUTABLE_SUFFIXES = frozenset({
+    ".pkl", ".pickle", ".joblib", ".py", ".pyc", ".so", ".dylib", ".dll", ".exe"
+})
+
+
+def check_data_only_artifact(artifact_dir: str) -> None:
+    """Refuse formats that can execute code during model activation."""
+    offenders = sorted(
+        str(path.relative_to(artifact_dir))
+        for path in Path(artifact_dir).rglob("*")
+        if path.is_file() and path.suffix.lower() in _EXECUTABLE_SUFFIXES
+    )
+    if offenders:
+        raise ArtifactRejected(
+            f"{artifact_dir}: executable model files are not accepted: {offenders}"
+        )
+
+
+class SafeDetector:
+    """A detector reconstructed from validated JSON and trusted repository code."""
+
+    def __init__(self, spec: Mapping):
+        import numpy as np
+
+        allowed = {"format", "kind", "feature_order", "mean", "scale", "coef",
+                   "intercept", "threshold"}
+        extra = sorted(set(spec) - allowed)
+        if extra:
+            raise ArtifactRejected(f"detector.json has unexpected keys {extra}")
+        if spec.get("format") != "argus-detector-v1":
+            raise ArtifactRejected("detector.json has an unsupported format")
+        self.kind = spec.get("kind")
+        if self.kind == "deterministic":
+            required = {"format", "kind"}
+            if set(spec) != required:
+                raise ArtifactRejected("deterministic detector contains unexpected parameters")
+            self.feature_order = None
+            return
+        if self.kind != "logistic_regression":
+            raise ArtifactRejected(f"detector.json has unsupported kind {self.kind!r}")
+        required = {"format", "kind", "feature_order", "mean", "scale", "coef",
+                    "intercept", "threshold"}
+        missing = sorted(required - set(spec))
+        if missing:
+            raise ArtifactRejected(f"detector.json is missing keys {missing}")
+        self.feature_order = list(spec["feature_order"])
+        self.mean = np.asarray(spec["mean"], dtype=float)
+        self.scale = np.asarray(spec["scale"], dtype=float)
+        self.coef = np.asarray(spec["coef"], dtype=float)
+        self.intercept = float(spec["intercept"])
+        self.threshold = float(spec["threshold"])
+        n = len(self.feature_order)
+        if self.mean.shape != (n,) or self.scale.shape != (n,) or self.coef.shape != (n,):
+            raise ArtifactRejected("detector.json parameter shapes do not match feature_order")
+        if np.any(self.scale <= 0) or not 0.0 <= self.threshold <= 1.0:
+            raise ArtifactRejected("detector.json has an invalid scale or threshold")
+        check_finite(self)
+
+    @staticmethod
+    def _regroup(frame):
+        return [
+            group.to_dict("records")
+            for _, group in frame.sort_values(["window_id", "pos"]).groupby("window_id", sort=True)
+        ]
+
+    def predict(self, model_input):
+        import numpy as np
+        from experiments.features import deterministic_predict, extract
+
+        windows = self._regroup(model_input)
+        if self.kind == "deterministic":
+            return np.asarray(deterministic_predict(windows), dtype=int)
+        values = np.asarray([extract(window) for window in windows], dtype=float)
+        normalised = (values - self.mean) / self.scale
+        logits = normalised @ self.coef + self.intercept
+        probabilities = 1.0 / (1.0 + np.exp(-logits))
+        return (probabilities >= self.threshold).astype(int)
+
+
+def load_safe_model(artifact_dir: str,
+                    expected_feature_order: Optional[Sequence[str]] = None) -> SafeDetector:
+    """Load a detector without importing or deserialising artifact-provided code."""
+    check_required_files(artifact_dir)
+    check_data_only_artifact(artifact_dir)
+    path = Path(artifact_dir) / "detector.json"
+    try:
+        spec = json.loads(path.read_text())
+    except Exception as exc:
+        raise ArtifactRejected(f"{path}: invalid JSON ({exc})") from None
+    if not isinstance(spec, Mapping):
+        raise ArtifactRejected(f"{path}: root must be an object")
+    model = SafeDetector(spec)
+    if (expected_feature_order is not None and model.feature_order is not None
+            and model.feature_order != list(expected_feature_order)):
+        raise ArtifactRejected(
+            "detector.json feature order does not match the activation contract"
+        )
+    return model
+
+
 # --------------------------------------------------------------------------- #
 # 3. Provenance                                                               #
 # --------------------------------------------------------------------------- #
 def check_provenance(tags: Mapping, expected_dataset_sha256: Optional[str] = None,
+                     expected_code_revision: Optional[str] = None,
+                     expected_run_id: Optional[str] = None,
+                     expected_kind: Optional[str] = None,
                      schema: Mapping = ARTIFACT_SCHEMA) -> None:
     """Refuse a version that does not say where it came from.
 
@@ -379,6 +472,15 @@ def check_provenance(tags: Mapping, expected_dataset_sha256: Optional[str] = Non
             f"version was built on dataset {tags['dataset_sha256'][:12]}... but "
             f"this promotion expects {expected_dataset_sha256[:12]}..."
         )
+    for key, wanted in {
+        "code_revision": expected_code_revision,
+        "run_id": expected_run_id,
+        "kind": expected_kind,
+    }.items():
+        if wanted is not None and tags[key] != wanted:
+            raise ArtifactRejected(
+                f"version provenance {key}={tags[key]!r} does not match {wanted!r}"
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -502,39 +604,15 @@ def check_finite(obj, *, _seen=None, _path="model", _budget=None) -> int:
 # --------------------------------------------------------------------------- #
 # 5. The gate: validate a staged version, THEN activate it                    #
 # --------------------------------------------------------------------------- #
-def validate_version(client, registered_model: str, version: str, *,
-                     canary_frame, canary_expected_rows: int,
-                     expected_feature_order: Sequence[str],
-                     expected_dataset_sha256: Optional[str] = None,
-                     manifest: Optional[Mapping] = None,
-                     manifest_dir: Optional[str] = None,
-                     schema: Mapping = ARTIFACT_SCHEMA) -> dict:
-    """Run every check against `version` WITHOUT touching the production alias.
-
-    Loads by explicit version URI (`models:/name/version`), never by alias, so
-    nothing here can make a bad artifact reachable to a caller. Returns a report
-    on success; raises `ArtifactRejected` on the first failure.
-    """
+def resolve_artifact_dir(client, registered_model: str, version: str) -> str:
+    """Resolve one registry version to a local directory without loading it."""
     import mlflow
 
-    report: dict = {"version": str(version), "checks": []}
-
-    def ok(name, detail=""):
-        report["checks"].append({"check": name, "passed": True, "detail": detail})
-
     mv = client.get_model_version(registered_model, version)
-
-    # 1. provenance, from the registry rather than from the artifact itself
-    check_provenance(mv.tags, expected_dataset_sha256, schema)
-    ok("provenance", f"dataset_sha256={mv.tags['dataset_sha256'][:12]}... "
-                     f"kind={mv.tags['kind']}")
-
     artifact_dir = str(mv.source)
     if artifact_dir.startswith("file://"):
         artifact_dir = artifact_dir[len("file://"):]
     if not os.path.isdir(artifact_dir):
-        # models:/ URIs and other non-local stores resolve through mlflow's own
-        # downloader, which returns the local path for a file store without copying.
         try:
             artifact_dir = mlflow.artifacts.download_artifacts(str(mv.source))
         except Exception as exc:
@@ -545,6 +623,51 @@ def validate_version(client, registered_model: str, version: str, *,
     if not os.path.isdir(artifact_dir):
         raise ArtifactRejected(f"version {version}: artifact source {artifact_dir} "
                                "is not a readable directory")
+    return artifact_dir
+
+
+def load_registered_model(client, registered_model: str, version: str) -> SafeDetector:
+    """Load an already validated data-only registry version."""
+    return load_safe_model(resolve_artifact_dir(client, registered_model, version))
+
+
+def validate_version(client, registered_model: str, version: str, *,
+                     canary_frame, canary_expected_rows: int,
+                     expected_feature_order: Sequence[str],
+                     expected_dataset_sha256: Optional[str] = None,
+                     expected_code_revision: Optional[str] = None,
+                     expected_run_id: Optional[str] = None,
+                     expected_kind: Optional[str] = None,
+                     manifest: Optional[Mapping] = None,
+                     manifest_dir: Optional[str] = None,
+                     schema: Mapping = ARTIFACT_SCHEMA) -> dict:
+    """Run every check against `version` WITHOUT touching the production alias.
+
+    Loads by explicit version URI (`models:/name/version`), never by alias, so
+    nothing here can make a bad artifact reachable to a caller. Returns a report
+    on success; raises `ArtifactRejected` on the first failure.
+    """
+    report: dict = {"version": str(version), "checks": []}
+
+    def ok(name, detail=""):
+        report["checks"].append({"check": name, "passed": True, "detail": detail})
+
+    mv = client.get_model_version(registered_model, version)
+
+    # 1. provenance, from the registry rather than from the artifact itself
+    check_provenance(
+        mv.tags,
+        expected_dataset_sha256,
+        expected_code_revision,
+        expected_run_id,
+        expected_kind,
+        schema,
+    )
+    ok("provenance", f"dataset_sha256={mv.tags['dataset_sha256'][:12]}... "
+                     f"code={mv.tags['code_revision']} run={mv.tags['run_id']} "
+                     f"kind={mv.tags['kind']}")
+
+    artifact_dir = resolve_artifact_dir(client, registered_model, version)
 
     # 2. the artifact is complete, and matches its manifest if one was recorded
     check_required_files(artifact_dir, schema)
@@ -555,24 +678,30 @@ def validate_version(client, registered_model: str, version: str, *,
         verify_files(artifact_dir, manifest)
         ok("digest", f"{len(manifest['files'])} files match sha256 and byte size")
 
-    # 3. no executable payload - BEFORE load_model gets anywhere near it
-    refs = check_pickle_globals(os.path.join(artifact_dir, "python_model.pkl"))
-    mods = sorted({m for m, _ in refs})
-    ok("pickle_globals", f"{len(refs)} global refs across {len(mods)} modules, "
-                         "all allowlisted")
+    # 3. activation accepts data only. There is no pickle allowlist here because
+    # cloudpickle can construct executable functions using its own helper globals.
+    check_data_only_artifact(artifact_dir)
+    ok("data_only", "no pickle, Python, native-library, or executable files")
 
     # 4. the declared feature order is the contract's
     declared = check_feature_order(artifact_dir, expected_feature_order, schema)
     ok("feature_order", f"{len(declared)} features in contract order" if declared
        else "artifact declares no feature contract (raw-row model)")
 
-    # 5. staged load, by version. Only now is any of the artifact's code run.
-    model = mlflow.pyfunc.load_model(f"models:/{registered_model}/{version}")
-    ok("staged_load", f"models:/{registered_model}/{version}")
+    # 5. staged load reconstructs a fixed detector from JSON using repository
+    # code. Artifact bytes are parsed as data and never imported or unpickled.
+    model = load_safe_model(artifact_dir, expected_feature_order)
+    if model.kind != mv.tags["kind"]:
+        raise ArtifactRejected(
+            f"detector kind {model.kind!r} does not match registry provenance "
+            f"{mv.tags['kind']!r}"
+        )
+    if declared is None and model.feature_order is not None:
+        declared = model.feature_order
+    ok("staged_load", f"data-only detector from version {version}")
 
     # 6. finite weights
-    inner = model.unwrap_python_model() if hasattr(model, "unwrap_python_model") else model
-    n_arrays = check_finite(inner)
+    n_arrays = check_finite(model)
     ok("finite_weights", f"{n_arrays} float array(s) checked, all finite")
 
     # 7. dtype/shape/domain of a real prediction on the contract's columns

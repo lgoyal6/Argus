@@ -61,12 +61,23 @@ def test_pickle_globals_rejects_unparseable(tmp_path):
         g.check_pickle_globals(str(p))
 
 
+def test_pickle_globals_rejects_cloudpickle_function_construction(tmp_path):
+    cloudpickle = pytest.importorskip("cloudpickle")
+    p = tmp_path / "function.pkl"
+    p.write_bytes(cloudpickle.dumps(lambda: "constructed", protocol=5))
+    with pytest.raises(g.ArtifactRejected) as error:
+        g.check_pickle_globals(str(p))
+    assert "cloudpickle" in str(error.value)
+
+
 # ── digests / manifest ───────────────────────────────────────────────────────
 def _artifact(tmp_path):
     d = tmp_path / "art"
     d.mkdir()
-    (d / "MLmodel").write_text("flavors: {}\n")
-    (d / "python_model.pkl").write_bytes(pickle.dumps({"ok": 1}, protocol=5))
+    (d / "MLmodel").write_text("flavors:\n  argus_safe:\n    data: detector.json\n")
+    (d / "detector.json").write_text(json.dumps({
+        "format": "argus-detector-v1", "kind": "deterministic"
+    }))
     return d
 
 
@@ -74,7 +85,7 @@ def test_verify_files_accepts_then_rejects(tmp_path):
     d = _artifact(tmp_path)
     man = g.build_manifest(str(d), {"kind": "test"})
     g.verify_files(str(d), man)  # control: unmodified matches
-    (d / "python_model.pkl").write_bytes(b"tampered")
+    (d / "detector.json").write_text("tampered")
     with pytest.raises(g.ArtifactRejected):
         g.verify_files(str(d), man)
 
@@ -160,7 +171,7 @@ def test_load_manifest_refuses_a_missing_tag_file_or_edited_manifest(tmp_path):
     # the manifest file itself is edited to match a tampered artifact
     p = Path(g.manifest_path(str(mdir), "m", "3"))
     man = json.loads(p.read_text())
-    man["files"]["python_model.pkl"]["sha256"] = "0" * 64
+    man["files"]["detector.json"]["sha256"] = "0" * 64
     p.write_text(json.dumps(man))
     with pytest.raises(g.ArtifactRejected):
         g.load_manifest(client, "m", "3", str(mdir))
@@ -178,13 +189,112 @@ def test_verify_files_rejects_extra_and_missing(tmp_path):
         g.verify_files(str(d), man)
 
 
+def test_activation_format_rejects_pickle_even_when_its_manifest_matches(tmp_path):
+    d = _artifact(tmp_path)
+    (d / "python_model.pkl").write_bytes(pickle.dumps({"apparently": "benign"}, protocol=5))
+    g.verify_files(str(d), g.build_manifest(str(d), {"kind": "test"}))
+    with pytest.raises(g.ArtifactRejected) as error:
+        g.check_data_only_artifact(str(d))
+    assert "python_model.pkl" in str(error.value)
+
+
+def test_data_only_deterministic_detector_loads_and_predicts(tmp_path):
+    import pandas as pd
+
+    d = _artifact(tmp_path)
+    model = g.load_safe_model(str(d))
+    frame = pd.DataFrame.from_records([{
+        "window_id": 0, "pos": pos, "step": pos, "train_loss": 1.0,
+        "val_loss": 1.0, "val_acc": 0.5, "grad_norm": 1.0,
+    } for pos in range(21)],
+        columns=[column["name"] for column in g.ARTIFACT_SCHEMA["input_columns"]])
+    prediction = model.predict(frame)
+    g.check_prediction(prediction, 1)
+
+
+def test_data_only_logistic_detector_loads_without_sklearn_pickle(tmp_path):
+    import pandas as pd
+    from experiments.features import FEATURE_NAMES
+
+    d = _artifact(tmp_path)
+    spec = {
+        "format": "argus-detector-v1", "kind": "logistic_regression",
+        "feature_order": FEATURE_NAMES,
+        "mean": [0.0] * len(FEATURE_NAMES), "scale": [1.0] * len(FEATURE_NAMES),
+        "coef": [0.0] * len(FEATURE_NAMES), "intercept": 1.0, "threshold": 0.5,
+    }
+    (d / "detector.json").write_text(json.dumps(spec))
+    (d / "feature_contract.json").write_text(json.dumps({"features": FEATURE_NAMES}))
+    model = g.load_safe_model(str(d))
+    frame = pd.DataFrame.from_records([{
+        "window_id": 0, "pos": pos, "step": pos, "train_loss": 1.0,
+        "val_loss": 1.0, "val_acc": 0.5, "grad_norm": 1.0,
+    } for pos in range(21)],
+        columns=[column["name"] for column in g.ARTIFACT_SCHEMA["input_columns"]])
+    assert model.predict(frame).tolist() == [1]
+
+
+def test_data_only_logistic_detector_cannot_skip_feature_order_validation(tmp_path):
+    from experiments.features import FEATURE_NAMES
+
+    d = _artifact(tmp_path)
+    spec = {
+        "format": "argus-detector-v1", "kind": "logistic_regression",
+        "feature_order": list(reversed(FEATURE_NAMES)),
+        "mean": [0.0] * len(FEATURE_NAMES), "scale": [1.0] * len(FEATURE_NAMES),
+        "coef": [0.0] * len(FEATURE_NAMES), "intercept": 1.0, "threshold": 0.5,
+    }
+    (d / "detector.json").write_text(json.dumps(spec))
+    with pytest.raises(g.ArtifactRejected, match="feature order"):
+        g.load_safe_model(str(d), expected_feature_order=FEATURE_NAMES)
+
+
 # ── provenance ───────────────────────────────────────────────────────────────
 def test_provenance_accepts_then_rejects():
-    g.check_provenance({"dataset_sha256": "abc", "kind": "det"}, "abc")  # control
+    tags = {
+        "dataset_sha256": "abc", "code_revision": "deadbeef+dirty",
+        "run_id": "run-1", "kind": "deterministic",
+    }
+    g.check_provenance(tags, "abc", "deadbeef+dirty", "run-1", "deterministic")
     with pytest.raises(g.ArtifactRejected):
-        g.check_provenance({"kind": "det"})  # no dataset hash
+        g.check_provenance({"kind": "deterministic"})
     with pytest.raises(g.ArtifactRejected):
-        g.check_provenance({"dataset_sha256": "zzz", "kind": "det"}, "abc")  # wrong hash
+        g.check_provenance({**tags, "dataset_sha256": "zzz"}, "abc")
+    with pytest.raises(g.ArtifactRejected, match="code_revision"):
+        g.check_provenance(tags, "abc", "other", "run-1", "deterministic")
+    with pytest.raises(g.ArtifactRejected, match="run_id"):
+        g.check_provenance(tags, "abc", "deadbeef+dirty", "run-2", "deterministic")
+    with pytest.raises(g.ArtifactRejected, match="kind"):
+        g.check_provenance(tags, "abc", "deadbeef+dirty", "run-1", "other")
+
+
+def test_registry_kind_cannot_disagree_with_detector_kind(tmp_path):
+    import pandas as pd
+    from experiments.features import FEATURE_NAMES
+
+    artifact = _artifact(tmp_path)
+    tags = {
+        "dataset_sha256": "abc", "code_revision": "deadbeef+dirty",
+        "run_id": "run-1", "kind": "logistic_regression",
+    }
+
+    class Client:
+        def get_model_version(self, _model, _version):
+            return type("MV", (), {"tags": tags, "source": str(artifact)})()
+
+    frame = pd.DataFrame.from_records([{
+        "window_id": 0, "pos": pos, "step": pos, "train_loss": 1.0,
+        "val_loss": 1.0, "val_acc": 0.5, "grad_norm": 1.0,
+    } for pos in range(21)],
+        columns=[column["name"] for column in g.ARTIFACT_SCHEMA["input_columns"]])
+    with pytest.raises(g.ArtifactRejected, match="detector kind"):
+        g.validate_version(
+            Client(), "m", "1", canary_frame=frame, canary_expected_rows=1,
+            expected_feature_order=FEATURE_NAMES, expected_dataset_sha256="abc",
+            expected_code_revision="deadbeef+dirty", expected_run_id="run-1",
+            expected_kind="logistic_regression",
+            manifest=g.build_manifest(str(artifact), tags),
+        )
 
 
 # ── feature order ────────────────────────────────────────────────────────────
