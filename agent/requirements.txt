@@ -4,3 +4,10 @@ python-dotenv>=1.0.0
 supabase>=2.4.0
 requests
 google-cloud-secret-manager>=2.20.0
+
+# obs.py imports these only when OTEL_EXPORTER_OTLP_ENDPOINT is set, and is inert
+# otherwise. Declared as hard requirements anyway: an optional dependency that is
+# imported by a code path a single environment variable turns on is a crash at
+# startup waiting for the day somebody sets it.
+opentelemetry-sdk>=1.44,<2
+opentelemetry-exporter-otlp-proto-http>=1.44,<2

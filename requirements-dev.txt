@@ -9,3 +9,10 @@ fastapi>=0.110.0
 httpx>=0.27.0
 requests>=2.31.0
 python-dotenv>=1.0.0
+
+# The tracing assertions in tests/test_observability.py read spans back from a real
+# SDK exporter, because the redaction rules are only worth anything at the point
+# telemetry leaves the process. Without this the whole tracing half of that file is
+# ten collection errors, which is what it was. The OTLP exporter is deliberately NOT
+# here: the tests inject their own in-memory sink and never open a socket.
+opentelemetry-sdk>=1.44,<2
