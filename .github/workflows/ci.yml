@@ -1,0 +1,93 @@
+name: ci
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      # No Supabase credentials here on purpose: everything under tests/ is the
+      # logic that must hold without a network - the incremental ingest cursor,
+      # the anomaly statistics, and the agent's tool boundary.
+      - run: python -m pytest tests/ -q
+
+  # The agent's tools are reachable from model output, and the model reads training
+  # logs it does not control. This job is the one that must not silently stop
+  # running: it asserts that path escapes and non-allowlisted config keys are
+  # refused, while a legitimate recovery still succeeds.
+  agent-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest tests/test_agent_sandbox.py tests/test_launch_idempotency.py -v
+
+  # The recovery path's honesty. These assert that a requested action is not recorded
+  # as a restart, a restarted process is not recorded as progress, and progress is not
+  # recorded as a corrected outcome - the collapse that had the agent logging "fixed"
+  # for training runs that died on their argument vector. The launch-contract job is
+  # here too because that mismatch is what made the failure silent, and it is checkable
+  # without a training stack installed.
+  recovery-honesty:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest tests/test_recovery_attempt.py tests/test_launch_contract.py -v
+
+  # The API's published contract. `export_openapi.py --check` fails if backend/openapi.json
+  # drifts from the routes, and the contract suite compares the committed document with
+  # the live app in both directions, so a route change that nobody reviewed cannot land
+  # quietly. The generated-input job is here too: it asserts the app never answers with a
+  # status its own contract does not declare, and never puts interpreter internals in a
+  # response body.
+  api-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # backend/requirements.txt too, because generating the contract imports the real
+      # app, and the real app imports the supabase client. The test suite itself does
+      # NOT need it: conftest stubs supabase when it is absent and poisons
+      # create_client when it is present, so both configurations are exercised across
+      # these jobs.
+      - run: pip install -r requirements-dev.txt -r backend/requirements.txt
+      - run: python backend/export_openapi.py --check
+      - run: python -m pytest tests/test_api_contract.py tests/test_api_generated_inputs.py -q
+
+  # Credentials, and the observability that must not become a place they end up.
+  # test_secret_lifecycle.py scans every tracked file for credential shapes, so a key
+  # pasted into the tree fails the build rather than reaching a reviewer. Proving a
+  # scrubber works needs strings of exactly the shape it removes: five such lines exist,
+  # two here and three in test_observability.py, and each one carries a per-line
+  # `credential-shape-fixture` marker. Nothing else in the repository may look like a
+  # key, and the marker has to be typed onto the offending line to be honoured.
+  # fetch-depth stays 0 so the checkout is a real git repository and the check-ignore
+  # cases run instead of skipping.
+  secrets-and-observability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the history scan needs the whole history, not a shallow clone
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest tests/test_secret_lifecycle.py tests/test_observability.py tests/test_flat_layout.py -v
