@@ -59,7 +59,11 @@ def get_runs():
 
 def get_run(run_id):
     client = get_client()
-    response = client.table("runs").select("*").eq("id", run_id).execute()
+    # Spanned because it is on the ingest path: every /metrics/sync checks the run
+    # exists before reading a byte of the file. A slow database showed up here first,
+    # and without a span the request span was simply slow for no visible reason.
+    with obs.span("db.select", kind="client", dependency="supabase", table="runs"):
+        response = client.table("runs").select("*").eq("id", run_id).execute()
     return response.data[0] if response.data else None
 
 
@@ -115,21 +119,43 @@ def insert_metrics(run_id, metrics_file):
                     dependency="metrics_file")
             return {"error": "metrics file not found"}
 
-        with obs.span("ingest.batch", dependency="supabase"):
-            tailer = _tailer_for(run_id, metrics_file)
-            entries, next_offset = tailer.read_batch()
-            if not entries:
-                tailer.commit(next_offset)
-                obs.incr("argus_ingest_rows_total", outcome="empty")
-                return {"inserted": 0}
+        # Read outside the ingest span, because the parent of that span is a header on
+        # the rows this read returns: the trainer wrote them in another process,
+        # usually before this one started, so nothing is inherited from an ambient
+        # context. Whichever row is newest in the batch is the caller the ingest is
+        # acting for.
+        tailer = _tailer_for(run_id, metrics_file)
+        entries, next_offset = tailer.read_batch()
+        rows, queue_parent = [], None
+        for entry in entries:
+            # The `_trace` header comes off here and goes no further. The metrics
+            # table stores measurements; a telemetry header in it would be a column
+            # the schema does not have and a copy of the trace nobody would read.
+            row, traceparent = obs.take_trace(entry)
+            row["run_id"] = run_id
+            rows.append(row)
+            if traceparent:
+                queue_parent = traceparent
 
-            rows = []
-            for entry in entries:
-                entry["run_id"] = run_id
-                rows.append(entry)
+        # An empty poll opens no span. The agent polls every 10 seconds whether or not
+        # the trainer wrote anything, so a span here would be several thousand a day
+        # per run that all say "nothing arrived".
+        if not rows:
+            tailer.commit(next_offset)
+            obs.incr("argus_ingest_rows_total", outcome="empty")
+            return {"inserted": 0}
 
+        with obs.span("ingest.batch", kind="consumer",
+                      parent=obs.inherited_or(queue_parent),
+                      dependency="supabase", batch_rows=len(rows)):
             try:
-                client.table("metrics").upsert(rows, on_conflict="run_id,step").execute()
+                # The database call itself, and its own span: the one place in this
+                # function that leaves the process for something other than a file.
+                # Without it a slow ingest is attributable only to "ingest", and the
+                # question is always whether the sink or the file was slow.
+                with obs.span("db.upsert", kind="client", dependency="supabase",
+                              table="metrics", batch_rows=len(rows)):
+                    client.table("metrics").upsert(rows, on_conflict="run_id,step").execute()
             except Exception as e:
                 # The cursor is deliberately NOT committed here, so the batch replays.
                 # The classification is what makes the log line answer "why did ingest
@@ -188,7 +214,8 @@ def _ingest_failure_reason(exc):
 
 def get_metrics(run_id, limit=None, offset=0):
     client = get_client()
-    response = client.table("metrics").select("*").eq("run_id", run_id).order("step").execute()
+    with obs.span("db.select", kind="client", dependency="supabase", table="metrics"):
+        response = client.table("metrics").select("*").eq("run_id", run_id).order("step").execute()
     return _page(response.data, limit, offset)
 
 

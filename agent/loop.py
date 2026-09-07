@@ -4,11 +4,12 @@ import obs
 # set this to your actual run ID from Supabase
 RUN_ID = "26a75d76-72f9-4afe-abc3-fd1474284d0f"  # e.g. "your-uuid-here"
 
+import os
 import time
 import json
 import requests
 from pathlib import Path
-from detector import detect_anomalies
+from detector import detect_anomalies, newest_trace_context
 from tools import TOOLS, run_tool
 from prompts import SYSTEM_PROMPT, build_user_prompt
 from logger import log_decision
@@ -23,6 +24,7 @@ except ImportError:  # pragma: no cover - exercised only by the flat layout
 from dotenv import load_dotenv
 load_dotenv("../.env")
 # ── config ─────────────────────────────────────────────────────────────────────
+BACKEND_URL = os.environ.get("ARGUS_BACKEND_URL", "http://backend:8000")
 METRICS_FILE = "../training_job/metrics/metrics.jsonl"
 CONFIG_PATH = "../training_job/config.yaml"
 TRAINING_DIR = "../training_job"
@@ -146,9 +148,63 @@ def run_agent(anomalies):
     return None
 
 
+def poll_once(last_handled, act=None):
+    """One cycle: ingest what is new, look at it, and act if it is wrong.
+
+    One span per poll, parented on the newest row the trainer wrote. That row is what
+    this poll exists to act on and it arrived from another process, so it is the only
+    available parent - and taking it here means the ingest call, the detection and
+    any recovery below are one trace rather than three unrelated ones that no query
+    joins.
+
+    `act` defaults to the real agent invocation. It is a parameter because that
+    invocation is a paid model call, which makes the whole cycle undrivable without
+    one; nothing else about the cycle changes.
+    """
+    act = act or run_agent
+    with obs.span("agent.poll", kind="consumer",
+                  parent=newest_trace_context(METRICS_FILE)):
+        # Inside the poll span so the backend's server span, and the database write
+        # under it, join this trace rather than starting one of their own.
+        with obs.span("agent.ingest_request", kind="client", dependency="backend"):
+            headers = {}
+            traceparent = obs.current_traceparent()
+            if traceparent:
+                headers["traceparent"] = traceparent
+            try:
+                requests.post(
+                    f"{BACKEND_URL}/runs/{RUN_ID}/metrics/sync",
+                    json={"metrics_file": METRICS_FILE},
+                    headers=headers,
+                    timeout=5
+                )
+            except Exception:
+                pass
+
+        anomalies = detect_anomalies(METRICS_FILE)
+        if not anomalies:
+            print(".", end="", flush=True)
+            return []
+
+        # only act if this anomaly type hasn't been handled within the last COOLDOWN_STEPS
+        new_anomalies = [
+            a for a in anomalies
+            if a["step"] - last_handled.get(a["type"], -COOLDOWN_STEPS) >= COOLDOWN_STEPS
+        ]
+        if not new_anomalies:
+            print(".", end="", flush=True)
+            return []
+        for a in new_anomalies:
+            last_handled[a["type"]] = a["step"]
+        act(new_anomalies)
+        return new_anomalies
+
+
 # ── main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("Argus agent started")
+    # No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    obs.setup_tracing("argus-agent")
     if RUN_ID:
         logger.set_run_id(RUN_ID)
     print(f"watching: {METRICS_FILE}")
@@ -157,33 +213,9 @@ def main():
     last_handled = {}  # maps anomaly type -> step it was last handled at
 
     while True:
-        try:
-            requests.post(
-                f"http://backend:8000/runs/{RUN_ID}/metrics/sync",
-                json={"metrics_file": METRICS_FILE},
-                timeout=5
-            )
-        except Exception:
-            pass
-
-        anomalies = detect_anomalies(METRICS_FILE)
-
-        if anomalies:
-            # only act if this anomaly type hasn't been handled within the last COOLDOWN_STEPS
-            new_anomalies = [
-                a for a in anomalies
-                if a["step"] - last_handled.get(a["type"], -COOLDOWN_STEPS) >= COOLDOWN_STEPS
-            ]
-
-            if new_anomalies:
-                for a in new_anomalies:
-                    last_handled[a["type"]] = a["step"]
-                run_agent(new_anomalies)
-            else:
-                print(".", end="", flush=True)
-        else:
-            print(".", end="", flush=True)
-
+        poll_once(last_handled)
+        # Outside the poll span: a span that covered the sleep would report the poll
+        # interval as work.
         time.sleep(POLL_INTERVAL)
 
 

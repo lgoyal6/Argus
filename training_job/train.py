@@ -10,16 +10,27 @@ import time
 from pathlib import Path
 from model import SmallCNN
 
+# Flat in the image, as in the agent and backend images: docker/Dockerfile.training
+# copies obs.py in beside this file.
+import obs
+
 # ── load config ────────────────────────────────────────────────────────────────
 def load_config(path="config.yaml"):
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
 # ── emit metrics ───────────────────────────────────────────────────────────────
+# The producer side of the only queue this system has. metrics.jsonl is how the
+# trainer reaches the agent and the backend, which are separate processes that may
+# not have been running when the row was written, so the row is the only thing that
+# can carry the trace context to them. `_trace` is a message header, not data: every
+# consumer pops it before the row goes anywhere near the metrics table.
 def emit_metrics(metrics_file, payload):
     Path(metrics_file).parent.mkdir(parents=True, exist_ok=True)
-    with open(metrics_file, "a") as f:
-        f.write(json.dumps(payload) + "\n")
+    with obs.span("train.emit", kind="producer", step=payload.get("step")):
+        row = obs.attach_trace(payload)
+        with open(metrics_file, "a") as f:
+            f.write(json.dumps(row) + "\n")
 
 # ── compute gradient norm ──────────────────────────────────────────────────────
 def get_grad_norm(model):
@@ -151,4 +162,12 @@ def train(max_steps=None):
 
 if __name__ == "__main__":
     from cli import parse_args
-    train(max_steps=parse_args().max_steps)
+
+    # No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set. TRACEPARENT is put in the
+    # environment by training_job/server.py when a rerun launches this process, so
+    # the rows written below belong to the request that asked for them.
+    shutdown = obs.setup_tracing("argus-trainer")
+    with obs.span("train.run", kind="consumer", parent=os.environ.get("TRACEPARENT")):
+        train(max_steps=parse_args().max_steps)
+    obs.flush()
+    shutdown()

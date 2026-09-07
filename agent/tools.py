@@ -1,3 +1,4 @@
+import os
 import json
 import yaml
 from pathlib import Path
@@ -150,7 +151,8 @@ def patch_config(config_path, patches):
 # timeout is much shorter than a training run. Classifying the failure at the call site
 # is what turns "the recovery did not work" into "the training server did not answer in
 # 10s", which is a different problem with a different fix.
-TRAINING_SERVER = "http://training:8001/rerun"
+TRAINING_SERVER = os.environ.get("ARGUS_TRAINING_URL",
+                                 "http://training:8001/rerun")
 REQUEST_TIMEOUT_S = 10
 
 
@@ -182,9 +184,17 @@ def rerun_training(training_dir, max_steps=50, attempt_id=None):
     if not (1 <= max_steps <= 10000):
         raise SandboxError(f"max_steps={max_steps} outside the permitted range [1, 10000]")
     with obs.bind(attempt_id=attempt_id):
-        with obs.span("recovery.rerun_request", dependency="training_server",
+        with obs.span("recovery.rerun_request", kind="client",
+                      dependency="training_server",
                       max_steps=max_steps, timeout_s=REQUEST_TIMEOUT_S) as span:
             try:
+                # W3C trace context on the wire, so the training server's handler is
+                # a child of this span rather than the root of an unrelated trace.
+                # Without it the recovery path is two traces that no query joins.
+                headers = {}
+                traceparent = obs.current_traceparent()
+                if traceparent:
+                    headers["traceparent"] = traceparent
                 response = requests.post(
                     TRAINING_SERVER,
                     # The attempt id is the idempotency key. This request's timeout is far
@@ -192,6 +202,7 @@ def rerun_training(training_dir, max_steps=50, attempt_id=None):
                     # without the key it would start a second trainer appending to the same
                     # metrics file, and two interleaved runs make the stream unreadable.
                     json={"max_steps": max_steps, "attempt_id": attempt_id},
+                    headers=headers,
                     timeout=REQUEST_TIMEOUT_S
                 )
             except Exception as e:

@@ -112,7 +112,10 @@ def test_the_caller_injected_key_reaches_the_training_server(monkeypatch, tmp_pa
 
     class FakeRequests:
         @staticmethod
-        def post(url, json=None, timeout=None):
+        def post(url, json=None, headers=None, timeout=None):
+            # `headers` mirrors requests.post: the caller now injects W3C trace
+            # context on this hop, and a double that refuses an argument the real
+            # function accepts fails for a reason the code under test does not have.
             sent.update(json)
             return FakeResponse()
 
