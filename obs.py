@@ -6,10 +6,23 @@ found. When one of those stalls, the question is always "which dependency, on wh
 run" - and until now the answer had to be reconstructed from `print()` output with no
 identifiers in it at all.
 
-This module is deliberately about 200 lines with no dependencies. The project already
-rejected Temporal for costing a server and 51 MB to buy one property it could write
-itself; importing OpenTelemetry to correlate three processes over a shared run id would
-be the same trade. What is here is the part that actually earns its cost.
+The correlation core below has no dependencies and is always on: a deployment that
+installs nothing extra still gets identifiers on every record. On top of it sits an
+opt-in OpenTelemetry layer that stays inert until `OTEL_EXPORTER_OTLP_ENDPOINT` is
+set.
+
+This module used to argue against that layer, by analogy with the project's decision
+to reject Temporal for costing a server and 51 MB to buy one property it could write
+itself. The analogy was wrong on the fact that decides it. Temporal bought durable
+retry, which this code could implement; OpenTelemetry buys the assembled cross-process
+view, which the records provably cannot produce, because a span id with no parent link
+says a stage was slow and never which caller it was slow for. It also costs no server
+of its own. Measured here at 20,000 spans per sample, 7 samples, median: 3.94us per
+span with no OTel wiring at all, 4.51us wired with no collector configured, 38.84us
+wired and exporting. So the deployment that does not opt in pays 0.57us per span, and
+the one that does pays about 10x, which is what `ARGUS_TRACE_SAMPLE_RATIO` is for: the
+trainer opens a span per emitted step, so at ratio 1.0 a 10,000-step run is 10,000
+traces.
 
 Three rules it enforces rather than documents:
 
@@ -47,7 +60,7 @@ import uuid
 # thread them through every signature, which is what stops them being dropped.
 _CONTEXT: contextvars.ContextVar[dict] = contextvars.ContextVar("argus_obs_context", default={})
 
-CORRELATION_KEYS = ("run_id", "attempt_id", "span_id")
+CORRELATION_KEYS = ("run_id", "attempt_id", "span_id", "trace_id")
 
 
 @contextlib.contextmanager
@@ -187,6 +200,221 @@ def capture():
         _capture = False
 
 
+# -- optional OpenTelemetry export ---------------------------------------------
+# Why this exists on top of the records above, and why it is not a replacement for
+# them.
+#
+# The records answer "what happened, on which run". They cannot answer "which of the
+# four processes was slow", because Argus's processes only ever meet through a file:
+# the trainer appends to metrics.jsonl, the agent polls it, and the backend ingests
+# it into the database. Correlating across that hop means agreeing on a wire format
+# for the parent context, and W3C `traceparent` is that format already, with an
+# extractor, an injector and a viewer that draws the assembled result. The viewer is
+# most of the value and is the part a hand-rolled span id cannot reach: a span id
+# with no parent link tells you a stage was slow, never which caller it was slow for.
+#
+# The measured cost of being wired but off, and of being on, is in the module
+# docstring above.
+#
+# Two rules carried over unchanged rather than restated:
+#   * every attribute goes through `sanitise` first, so a config or a credential
+#     cannot reach a span any more than it can reach a log line;
+#   * nothing here emits a metric, so the series bound proved by `declare_counter`
+#     is untouched. Identifiers belong on spans; that is the whole point of both.
+
+_provider = None
+_otel_on = False
+
+_SPAN_KINDS = ("internal", "server", "client", "producer", "consumer")
+
+
+def setup_tracing(service_name: str, endpoint: str | None = None, exporter=None):
+    """Install a tracer provider if a collector is configured, else nothing.
+
+    Returns a shutdown callable in both cases, so callers have no branch. No
+    `OTEL_EXPORTER_OTLP_ENDPOINT` means every span below stays exactly what it was
+    before this section existed: two log records and a `time.perf_counter()`.
+
+    `exporter` exists so a test can read back the spans this module actually emits.
+    The redaction rules are only worth anything at the point telemetry LEAVES the
+    process, and asserting on `sanitise` instead asserts on the input to the wiring
+    rather than on its output - which is exactly the gap that let an unscrubbed
+    exception message reach a span in the first place.
+    """
+    global _provider, _otel_on
+
+    endpoint = endpoint if endpoint is not None else os.environ.get(
+        "OTEL_EXPORTER_OTLP_ENDPOINT", "")
+    if not endpoint and exporter is None:
+        _otel_on = False
+        return lambda: None
+
+    from opentelemetry import trace as _trace
+    from opentelemetry.propagate import set_global_textmap
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+
+    set_global_textmap(TraceContextTextMapPropagator())
+    # The trainer opens a span per emitted step, so at ratio 1.0 a 10,000-step run is
+    # 10,000 traces. ParentBased is what keeps a sampled trace whole: once the root is
+    # in, every downstream process keeps its part of it rather than each rolling its
+    # own dice and leaving the trace with holes.
+    ratio = float(os.environ.get("ARGUS_TRACE_SAMPLE_RATIO", "1.0"))
+    provider = TracerProvider(
+        resource=Resource.create({"service.name": service_name}),
+        sampler=ParentBased(TraceIdRatioBased(ratio)),
+    )
+    if exporter is None:
+        # Imported here rather than above, because a caller that supplies its own sink
+        # has no use for a network exporter and should not have to install one. That
+        # is not hypothetical: it is how the tests read back the spans this module
+        # emits, and importing it unconditionally made every one of them an error on
+        # an install that had opentelemetry-sdk and nothing else.
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+        provider.add_span_processor(
+            BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint.rstrip("/") + "/v1/traces"))
+        )
+    else:
+        # An explicitly supplied sink is one the caller means to read back, so it is
+        # attached synchronously. Batching it would make every read a race with the
+        # exporter's own timer.
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+    _trace.set_tracer_provider(provider)
+    _provider = provider
+    _otel_on = True
+
+    def shutdown() -> None:
+        global _otel_on
+        provider.shutdown()
+        _otel_on = False
+
+    return shutdown
+
+
+def tracing_enabled() -> bool:
+    return _otel_on
+
+
+def flush(timeout_ms: int = 5_000) -> None:
+    """Push queued spans now. The agent loop and the trainer are killed rather than
+    returned from, and a batch processor that only flushes on its own timer loses the
+    last trace of every run - which is the one somebody is looking for."""
+    if _provider is not None:
+        _provider.force_flush(timeout_ms)
+
+
+def _otel_attrs(fields: dict) -> dict:
+    """Sanitised fields, narrowed to what the SDK will accept.
+
+    `sanitise` is the same function the log records go through, so an attribute cannot
+    carry anything a log line could not. The narrowing on top of it drops None and any
+    residual container, which the SDK would otherwise warn about once per span.
+    """
+    return {
+        key: value
+        for key, value in sanitise(fields).items()
+        if isinstance(value, (str, bool, int, float))
+    }
+
+
+@contextlib.contextmanager
+def _otel_span(name: str, kind: str, parent: str | None, fields: dict):
+    if not _otel_on:
+        yield None
+        return
+
+    from opentelemetry import trace as _trace
+    from opentelemetry.trace import SpanKind
+
+    kinds = {
+        "internal": SpanKind.INTERNAL,
+        "server": SpanKind.SERVER,
+        "client": SpanKind.CLIENT,
+        "producer": SpanKind.PRODUCER,
+        "consumer": SpanKind.CONSUMER,
+    }
+    context = _context_from(parent) if parent else None
+    tracer = _trace.get_tracer("argus")
+    with tracer.start_as_current_span(
+        name, context=context, kind=kinds[kind], attributes=_otel_attrs(fields),
+        record_exception=False, set_status_on_exception=False,
+    ) as raw:
+        yield raw
+
+
+def current_trace_id() -> str | None:
+    if not _otel_on:
+        return None
+    from opentelemetry import trace as _trace
+
+    ctx = _trace.get_current_span().get_span_context()
+    return format(ctx.trace_id, "032x") if ctx.is_valid else None
+
+
+def current_traceparent() -> str | None:
+    """The ambient context as one header value, or None when tracing is off.
+
+    This is what travels: into an HTTP header on the way to the backend or the
+    training server, and into the `_trace` field of a metrics row on the way through
+    the file that stands in for a queue.
+    """
+    if not _otel_on:
+        return None
+    from opentelemetry.propagate import inject
+
+    carrier: dict[str, str] = {}
+    inject(carrier)
+    return carrier.get("traceparent")
+
+
+# The header name a queued message carries its parent context under. metrics.jsonl
+# is the only channel between the trainer, the agent and the backend, so a row on it
+# is a message and this is its one header. It is stripped by `take_trace` before the
+# row reaches the metrics table: the database stores measurements, not telemetry.
+TRACE_FIELD = "_trace"
+
+
+def attach_trace(payload: dict) -> dict:
+    """The row as it goes onto the queue, carrying the current context if there is one."""
+    traceparent = current_traceparent()
+    return {**payload, TRACE_FIELD: traceparent} if traceparent else payload
+
+
+def inherited_or(traceparent: str | None) -> str | None:
+    """The parent to use for a consumer span: whoever asked, or the message itself.
+
+    A queue consumer has two candidate parents and must not take both. When something
+    upstream is already in scope - the agent's poll, or an inbound request that
+    carries context - that caller IS the parent and the span inherits it, so passing
+    the message's own context as well would move the span into a different trace from
+    its own caller and split the request in two. Only when nothing is in scope does
+    the message's header become the parent, which is the honest reading of "this work
+    exists because that row arrived".
+    """
+    return None if current_trace_id() else traceparent
+
+
+def take_trace(payload: dict) -> tuple[dict, str | None]:
+    """Split a queued row into the row itself and the context it travelled with."""
+    if TRACE_FIELD not in payload:
+        return payload, None
+    row = {k: v for k, v in payload.items() if k != TRACE_FIELD}
+    return row, payload[TRACE_FIELD]
+
+
+def _context_from(traceparent: str):
+    from opentelemetry.propagate import extract
+
+    return extract({"traceparent": traceparent})
+
+
 class Span:
     """The handle a span body uses to say how the work actually turned out.
 
@@ -197,41 +425,87 @@ class Span:
     dependency is worse than no span: it is a dashboard that says the system is fine.
     """
 
-    __slots__ = ("id", "outcome")
+    __slots__ = ("id", "outcome", "_otel")
 
-    def __init__(self, span_id):
+    def __init__(self, span_id, otel=None):
         self.id = span_id
         self.outcome = None
+        self._otel = otel
 
     def failed(self, outcome):
         self.outcome = outcome
+        if self._otel is not None:
+            from opentelemetry.trace import Status, StatusCode
+
+            self._otel.set_status(Status(StatusCode.ERROR, outcome))
+            self._otel.set_attribute("outcome", outcome)
+
+    def set(self, **fields):
+        """Attach late-known attributes, if a collector is listening."""
+        if self._otel is not None:
+            for key, value in _otel_attrs(fields).items():
+                self._otel.set_attribute(key, value)
+
+    def rename(self, name):
+        """Rename after the fact, for a request span that only learns its route
+        template once routing has happened. `GET /runs/9f2c1a/metrics` as an
+        operation name makes every run its own operation in the viewer's dropdown,
+        and the list stops being usable after a week; the concrete path stays on
+        `url.path`, where high cardinality is free."""
+        if self._otel is not None:
+            self._otel.update_name(name)
 
 
 @contextlib.contextmanager
-def span(name: str, **fields):
+def span(name: str, *, kind: str = "internal", parent: str | None = None, **fields):
     """A timed unit of work, correlated and measured.
 
-    Not an OpenTelemetry span: it emits a start and an end record sharing a span id,
-    with the duration on the end record. That is the part of tracing this system can
-    use, and it costs one import of the standard library.
+    Always emits the start and end records that this module has always emitted, so a
+    deployment with no collector is unchanged. When one IS configured it additionally
+    opens a real OpenTelemetry span around the same block, and binds that span's trace
+    id into the correlation context - which is what makes a log line and a span in the
+    viewer findable from each other.
+
+    `parent` is a W3C traceparent string, for the consumer side of a queue hop where
+    there is no ambient context to inherit from.
     """
     span_id = uuid.uuid4().hex[:12]
-    handle = Span(span_id)
     started = time.perf_counter()
-    with bind(span_id=span_id):
-        log(f"{name}.start", level="debug", **fields)
-        try:
-            yield handle
-        except BaseException as exc:
-            log(f"{name}.end", level="error", outcome="exception",
-                error_type=type(exc).__name__,
-                duration_ms=round((time.perf_counter() - started) * 1000, 3), **fields)
-            raise
-        else:
-            outcome = handle.outcome or "ok"
-            log(f"{name}.end", level="info" if outcome == "ok" else "error",
-                outcome=outcome,
-                duration_ms=round((time.perf_counter() - started) * 1000, 3), **fields)
+    with _otel_span(name, kind, parent, fields) as raw:
+        handle = Span(span_id, raw)
+        ids = {"span_id": span_id}
+        trace_id = current_trace_id()
+        if trace_id:
+            ids["trace_id"] = trace_id
+        with bind(**ids):
+            log(f"{name}.start", level="debug", **fields)
+            try:
+                yield handle
+            except BaseException as exc:
+                if raw is not None:
+                    from opentelemetry.trace import Status, StatusCode
+
+                    raw.set_status(Status(StatusCode.ERROR, type(exc).__name__))
+                    # Through the scrubber, like everything else. The SDK's own
+                    # exception recorder is turned off in _otel_span because it puts
+                    # `str(exc)` on the span untouched, and an exception message here
+                    # is a string this module has never seen: a Supabase URL, a signed
+                    # request, a config echoed back by a dependency.
+                    raw.add_event("exception", _otel_attrs({
+                        "exception.type": type(exc).__name__,
+                        "exception.message": str(exc),
+                    }))
+                log(f"{name}.end", level="error", outcome="exception",
+                    error_type=type(exc).__name__,
+                    duration_ms=round((time.perf_counter() - started) * 1000, 3), **fields)
+                raise
+            else:
+                outcome = handle.outcome or "ok"
+                if raw is not None:
+                    raw.set_attribute("outcome", outcome)
+                log(f"{name}.end", level="info" if outcome == "ok" else "error",
+                    outcome=outcome,
+                    duration_ms=round((time.perf_counter() - started) * 1000, 3), **fields)
 
 
 # -- metrics with a cardinality bound proved at declaration time ----------------
