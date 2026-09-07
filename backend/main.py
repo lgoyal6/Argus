@@ -8,8 +8,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.routing import Match
 
 from errors import InternalError
+from limits import AdmissionMiddleware, BodyLimitMiddleware, WorkLimitExceeded
 from routes import runs, metrics, decisions
 
+# Plain, and separately from the names above, so that `limits.MAX_BODY_BYTES` is read
+# from the module rather than copied at import: tests/test_abuse_limits.py reconfigures
+# by re-importing, which is what an operator does by restarting the server.
+import limits
 import obs
 
 app = FastAPI(title="AutoDebug API")
@@ -123,6 +128,40 @@ async def _http_exception(request: Request, exc: StarletteHTTPException):
     return response
 
 
+
+# ── abuse limits ───────────────────────────────────────────────────────────────
+# Order is the point, not an accident. add_middleware inserts each new layer
+# outermost, so this file reads inside-out and the running order is
+#   CORS -> trace_request -> BodyLimit -> Admission -> routes.
+#
+# BodyLimit sits outside Admission so an oversized or zip-bombed body is refused
+# before it can occupy a concurrency slot. Otherwise "send huge bodies" would be a
+# cheaper denial of service than sending real work.
+#
+# trace_request sits outside both so a 413 or a 503 is a span with a status, rather
+# than a refusal that never appears in a trace at all.
+#
+# CORS sits outside everything so that a 413 or a 503 still carries the CORS headers.
+# A refusal a browser cannot read is reported to the dashboard as a network error
+# instead of as the status the server actually chose, which hides exactly the
+# behaviour these limits exist to make visible. The cost is that a preflight is not
+# counted against the concurrency bound, which is acceptable: a preflight does no
+# database work.
+app.add_middleware(AdmissionMiddleware)
+app.add_middleware(BodyLimitMiddleware)
+
+
+# ── work bound ─────────────────────────────────────────────────────────────────
+@app.exception_handler(WorkLimitExceeded)
+def work_limit_exceeded(_request: Request, exc: WorkLimitExceeded) -> JSONResponse:
+    """413 in the flat shape the contract declares, like every other error here.
+
+    error_id is null rather than absent: this refusal is fully described by its own
+    message, and there is no process-log line to correlate it with.
+    """
+    return JSONResponse(status_code=413,
+                        content={"detail": str(exc), "error_id": None})
+
 # ── request entry ──────────────────────────────────────────────────────────
 @app.on_event("shutdown")
 def flush_telemetry():
@@ -183,3 +222,18 @@ app.include_router(decisions.router, prefix="/runs", tags=["decisions"])
 @app.get("/")
 def root():
     return {"status": "ok", "service": "AutoDebug API"}
+
+
+# ── the limits in force, so an operator can read them off a running server ─────
+@app.get("/limits")
+def limits_in_force():
+    return {
+        "max_body_bytes": limits.MAX_BODY_BYTES,
+        "max_decompressed_bytes": limits.MAX_DECOMPRESSED_BYTES,
+        "max_work_units": limits.MAX_WORK_UNITS,
+        "max_ingest_bytes": limits.MAX_INGEST_BYTES,
+        "request_timeout_s": limits.REQUEST_TIMEOUT_S,
+        "max_queue": limits.MAX_QUEUE,
+        "max_concurrency": limits.MAX_CONCURRENCY,
+        "reserved_light": limits.RESERVED_LIGHT,
+    }
