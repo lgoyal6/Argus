@@ -125,12 +125,21 @@ _MISSING_FILE = {409: {"model": ErrorResponse,
 _UNPARSEABLE = {400: {"model": ErrorResponse,
                       "description": "the request body could not be decoded"}}
 
-# Routes that do not resolve a run.
-COLLECTION_RESPONSES = dict(_SERVER)
+# Every read whose cost grows with the data can refuse instead of truncating. The
+# status is declared on those routes rather than handled globally and left undeclared,
+# because tests/test_api_generated_inputs.py holds the app to answering only statuses
+# its own contract names.
+_WORK_LIMIT = {413: {"model": ErrorResponse,
+                     "description": "the request asked for more rows than one request may read"}}
+
+# The run index: does not resolve a run, and pages, so it can refuse.
+COLLECTION_READ_RESPONSES = {**_WORK_LIMIT, **_SERVER}
 # Routes that do not resolve a run but do take a body.
 COLLECTION_WRITE_RESPONSES = {**_UNPARSEABLE, **_SERVER}
 # Routes scoped to one run.
 ERROR_RESPONSES = {**_NOT_FOUND, **_SERVER}
+# Run-scoped reads that page.
+PAGED_READ_RESPONSES = {**_NOT_FOUND, **_WORK_LIMIT, **_SERVER}
 # PATCH /runs/{id}/status also rejects a status outside the permitted set.
 STATUS_RESPONSES = {**_BAD_REQUEST, **_NOT_FOUND, **_SERVER}
 # POST /runs/{id}/decisions also rejects a body that names a different run.

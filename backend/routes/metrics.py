@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Query
 from schemas import MetricEntry
-from errors import ERROR_RESPONSES, SYNC_RESPONSES, conflict, internal_error, not_found
+from errors import (ERROR_RESPONSES, PAGED_READ_RESPONSES, SYNC_RESPONSES, conflict,
+                    internal_error, not_found)
 import db
+import limits
 
 router = APIRouter()
 
@@ -15,7 +17,8 @@ MAX_PAGE = 5000
 
 
 # ── get metrics for a run ──────────────────────────────────────────────────────
-@router.get("/{run_id}/metrics", response_model=list[MetricEntry], responses=ERROR_RESPONSES)
+@router.get("/{run_id}/metrics", response_model=list[MetricEntry],
+            responses=PAGED_READ_RESPONSES)
 def get_metrics(
     run_id: str,
     # `int | None` is the natural Python annotation and the wrong contract: FastAPI
@@ -38,6 +41,8 @@ def get_metrics(
         raise not_found()
     try:
         return db.get_metrics(run_id, limit=limit, offset=offset)
+    except limits.WorkLimitExceeded:
+        raise  # a chosen refusal, not an internal failure; see routes/runs.py
     except Exception as e:
         raise internal_error(e, "get_metrics")
 
