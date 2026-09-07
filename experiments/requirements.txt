@@ -3,5 +3,7 @@
 # integrity of the experiment without any of this installed.
 mlflow>=3.16.0
 scikit-learn>=1.9.0
+# imported directly by drift_eval for ks_2samp, not only as a scikit-learn dependency
+scipy>=1.11
 numpy>=2.5.2
 pandas>=3.0.5
