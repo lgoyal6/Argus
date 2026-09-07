@@ -160,6 +160,22 @@ class LearnedDetector(mlflow.pyfunc.PythonModel):
         return (p >= self.threshold).astype(int)
 
 
+def log_safe_detector(spec):
+    """Log the data-only representation accepted by the activation guard."""
+    mlflow.log_dict(spec, "safe-model/detector.json")
+    if spec.get("feature_order"):
+        mlflow.log_dict({"features": spec["feature_order"]},
+                        "safe-model/feature_contract.json")
+    mlflow.log_text(
+        "artifact_path: safe-model\n"
+        "flavors:\n"
+        "  argus_safe:\n"
+        "    data: detector.json\n"
+        "    format: argus-detector-v1\n",
+        "safe-model/MLmodel",
+    )
+
+
 # ── scoring ────────────────────────────────────────────────────────────────────
 def score(y_true, y_pred, scores=None):
     out = {
@@ -273,6 +289,7 @@ def main():
             code_paths=[str(REPO / "agent"), str(REPO / "experiments")],
             input_example=to_frame(Wte[:2]),
         )
+        log_safe_detector({"format": "argus-detector-v1", "kind": "deterministic"})
         results["deterministic"] = {**m, "run_id": run.info.run_id}
 
     # ── candidates 2 and 3: learned, tuned on validation only ───────────────────
@@ -311,6 +328,17 @@ def main():
                 code_paths=[str(REPO / "agent"), str(REPO / "experiments")],
                 input_example=to_frame(Wte[:2]),
             )
+            if name == "logistic_regression":
+                log_safe_detector({
+                    "format": "argus-detector-v1",
+                    "kind": name,
+                    "feature_order": feat.FEATURE_NAMES,
+                    "mean": scaler.mean_.tolist(),
+                    "scale": scaler.scale_.tolist(),
+                    "coef": model.coef_[0].tolist(),
+                    "intercept": float(model.intercept_[0]),
+                    "threshold": thr,
+                })
             results[name] = {**m, "run_id": run.info.run_id}
 
     # ── the gates ──────────────────────────────────────────────────────────────
@@ -322,11 +350,13 @@ def main():
         quality = (m["f1"] >= base["f1"] + MIN_F1_GAIN) and (m["recall"] >= MIN_RECALL)
         latency = m["latency_median_ms"] <= LATENCY_BUDGET_MS
         provenance = not REQUIRE_REAL_EPISODES  # no real episodes exist to satisfy it
+        serialization = name == "logistic_regression"
         verdict[name] = {
             "f1_gain_vs_baseline": round(m["f1"] - base["f1"], 4),
             "quality_gate": quality, "latency_gate": latency,
             "provenance_gate": provenance,
-            "promotable": quality and latency and provenance,
+            "data_only_artifact_gate": serialization,
+            "promotable": quality and latency and provenance and serialization,
         }
 
     print("\n── results (held-out episodes, scored once) ──")
@@ -344,31 +374,41 @@ def main():
     for name, v in verdict.items():
         print(f"  {name:24s} gain={v['f1_gain_vs_baseline']:+.4f} "
               f"quality={v['quality_gate']} latency={v['latency_gate']} "
-              f"provenance={v['provenance_gate']} PROMOTABLE={v['promotable']}")
+              f"provenance={v['provenance_gate']} "
+              f"data_only={v['data_only_artifact_gate']} PROMOTABLE={v['promotable']}")
 
     # ── registry: version, promote, smoke-test, roll back ──────────────────────
     # v1 is the deterministic detector and is registered unconditionally, so a
     # baseline is always available to roll back to. The best learned candidate is
-    # registered as v2 whether or not it passed, because "registered" records that it
-    # was built and measured; only promotion is a claim about production.
-    v1 = mlflow.register_model(f"runs:/{base['run_id']}/model", REGISTERED_MODEL)
-    best = max(verdict, key=lambda n: results[n]["f1"])
-    v2 = mlflow.register_model(f"runs:/{results[best]['run_id']}/model", REGISTERED_MODEL)
+    # registered as v2 whether or not it passed. Only the deterministic and
+    # logistic candidates have data-only activation artifacts. Gradient boosting
+    # remains a measured experiment until it has a non-executable export format.
+    deployable = "logistic_regression"
+    v1 = mlflow.register_model(f"runs:/{base['run_id']}/safe-model", REGISTERED_MODEL)
+    v2 = mlflow.register_model(f"runs:/{results[deployable]['run_id']}/safe-model", REGISTERED_MODEL)
+    revision = common["git_commit"] + ("+dirty" if common["git_dirty"] else "")
     for v in (v1, v2):
         client.set_model_version_tag(REGISTERED_MODEL, v.version, "dataset_sha256", dhash)
+        client.set_model_version_tag(REGISTERED_MODEL, v.version, "code_revision", revision)
+        client.set_model_version_tag(REGISTERED_MODEL, v.version, "run_id", v.run_id)
     client.set_model_version_tag(REGISTERED_MODEL, v1.version, "kind", "deterministic")
-    client.set_model_version_tag(REGISTERED_MODEL, v2.version, "kind", best)
+    client.set_model_version_tag(REGISTERED_MODEL, v2.version, "kind", deployable)
 
     # Digest each version's files at the moment it is produced, and pin the
     # manifest's own sha256 on the version as a tag. Without this the digest
     # check inside guarded_promote has nothing to compare against and silently
     # does nothing, which is how a wired guard still ends up not guarding.
     for v in (v1, v2):
+        model_version = client.get_model_version(REGISTERED_MODEL, v.version)
         guard.record_manifest(
             client, REGISTERED_MODEL, v.version,
             mlflow.artifacts.download_artifacts(v.source),
-            {"dataset_sha256": dhash, "run_id": client.get_model_version(
-                REGISTERED_MODEL, v.version).run_id},
+            {
+                "dataset_sha256": dhash,
+                "code_revision": revision,
+                "run_id": model_version.run_id,
+                "kind": model_version.tags["kind"],
+            },
             str(MANIFEST_DIR),
         )
 
@@ -376,22 +416,26 @@ def main():
     expected = yte[:200]
 
     # The guarded promotion path. `guarded_promote` runs every artifact check -
-    # provenance, digest, pickle-globals, feature order, staged load, finite
+    # provenance, digest, data-only format, feature order, staged load, finite
     # weights, prediction dtype/shape/domain - against the STAGED version and
     # only moves the production alias if all of them pass. A rejection raises
     # and leaves the alias untouched, so the prior version keeps serving. This
     # is the wiring the audit found missing: before, the alias moved first and
     # nothing was ever checked.
     def promote(version, label):
+        expected_run_id = base["run_id"] if label == "deterministic" else results[label]["run_id"]
         report = guard.guarded_promote(
             client, REGISTERED_MODEL, version, alias="production",
             canary_frame=smoke,
             canary_expected_rows=int(smoke["window_id"].nunique()),
             expected_feature_order=feat.FEATURE_NAMES,
             expected_dataset_sha256=dhash,
+            expected_code_revision=revision,
+            expected_run_id=expected_run_id,
+            expected_kind=label,
             manifest_dir=str(MANIFEST_DIR),
         )
-        m = mlflow.pyfunc.load_model(f"models:/{REGISTERED_MODEL}@production")
+        m = guard.load_registered_model(client, REGISTERED_MODEL, version)
         pred = np.asarray(m.predict(smoke)).ravel()
         agree = float((pred == expected).mean())
         passed = [c["check"] for c in report["checks"]]
@@ -400,14 +444,14 @@ def main():
         return agree
 
     print("\n── promotion and rollback (guarded) ──")
-    if verdict[best]["promotable"]:
-        promote(v2.version, best)
+    if verdict[deployable]["promotable"]:
+        promote(v2.version, deployable)
     else:
         # v2 did not clear its quality/latency gates, so it is never promoted:
         # the deterministic baseline is what goes to production. Validation is a
         # separate gate from quality - a well-formed artifact that is simply not
         # good enough still must not be activated.
-        print(f"  v{v2.version} ({best}) did not clear its quality/latency gates; "
+        print(f"  v{v2.version} ({deployable}) did not clear its gates; "
               "not promoting it")
     promote(v1.version, "deterministic")
     current = client.get_model_version_by_alias(REGISTERED_MODEL, "production")
