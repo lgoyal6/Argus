@@ -16,3 +16,9 @@ python-dotenv>=1.0.0
 # ten collection errors, which is what it was. The OTLP exporter is deliberately NOT
 # here: the tests inject their own in-memory sink and never open a socket.
 opentelemetry-sdk>=1.44,<2
+
+# tests/test_artifact_guard.py builds real .npy and pickle payloads to prove the
+# guard rejects them, so it needs numpy and nothing else from the model stack.
+# experiments/artifact_guard.py itself imports numpy lazily, inside the two checks
+# that read weights, so the module stays importable without it.
+numpy>=1.26
