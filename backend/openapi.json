@@ -313,6 +313,22 @@
         "summary": "Root"
       }
     },
+    "/limits": {
+      "get": {
+        "operationId": "limits_in_force_limits_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Limits In Force"
+      }
+    },
     "/runs/": {
       "get": {
         "operationId": "get_runs_runs__get",
