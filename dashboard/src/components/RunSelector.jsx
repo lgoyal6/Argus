@@ -7,30 +7,35 @@ export default function RunSelector({ selectedRun, onSelect }) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetchRuns();
-    const interval = setInterval(fetchRuns, 10000);
-    return () => clearInterval(interval);
-  }, []);
+    let cancelled = false;
+    const fetchRuns = async () => {
+      try {
+        const res = await getRuns();
+        if (cancelled) return;
+        setRuns(res.data);
+        setError(null);
+        setLoading(false);
+      } catch {
+        if (cancelled) return;
+        setError("could not load runs");
+        setLoading(false);
+      }
+    };
 
-  const fetchRuns = async () => {
-    try {
-      const res = await getRuns();
-      const data = res.data;
-      setRuns(data);
-      setError(null);
-      setLoading(false);
-    } catch (e) {
-      setError("could not load runs");
-      setLoading(false);
-    }
-  };
+    void fetchRuns();
+    const interval = setInterval(fetchRuns, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   // Auto-select the first (most recent) run on initial load
   useEffect(() => {
     if (runs.length > 0 && !selectedRun) {
       onSelect(runs[0]);
     }
-  }, [runs]);
+  }, [runs, selectedRun, onSelect]);
 
   // Keep selectedRun in sync when its status changes via polling
   useEffect(() => {
@@ -39,7 +44,7 @@ export default function RunSelector({ selectedRun, onSelect }) {
     if (updated && updated.status !== selectedRun.status) {
       onSelect(updated);
     }
-  }, [runs]);
+  }, [runs, selectedRun, onSelect]);
 
   const statusColor = (status) => {
     if (status === "running") return "#22c55e";
