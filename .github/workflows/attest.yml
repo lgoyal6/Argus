@@ -1,0 +1,156 @@
+name: attest
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: install
+        run: npm ci
+
+      - name: generate SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: dashboard
+          format: spdx-json
+          output-file: dashboard/argus-dashboard.spdx.json
+          syft-version: v1.51.1
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: build
+        run: npm run build
+
+      - name: pack deterministic build subject
+        run: |
+          tar --sort=name --format=posix \
+              --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+              -cf argus-dashboard-build.tar -C dist .
+          sha256sum argus-dashboard-build.tar | tee artifact-digests.txt
+
+      - name: attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dashboard/argus-dashboard-build.tar
+
+      - name: attest SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dashboard/argus-dashboard-build.tar
+          sbom-path: dashboard/argus-dashboard.spdx.json
+
+      - name: verify intended subject and reject a modified digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify argus-dashboard-build.tar --repo "$GITHUB_REPOSITORY"
+          cp argus-dashboard-build.tar argus-dashboard-build-tampered.tar
+          printf 'tampered' >> argus-dashboard-build-tampered.tar
+          if gh attestation verify argus-dashboard-build-tampered.tar --repo "$GITHUB_REPOSITORY"; then
+            echo "modified dashboard artifact unexpectedly verified" >&2
+            exit 1
+          fi
+
+      - name: upload attested subject
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: argus-dashboard-attested
+          path: |
+            dashboard/argus-dashboard-build.tar
+            dashboard/argus-dashboard.spdx.json
+            dashboard/artifact-digests.txt
+          if-no-files-found: error
+
+  containers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: backend
+            dockerfile: docker/Dockerfile.backend
+          - component: agent
+            dockerfile: docker/Dockerfile.agent
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: build actual image
+        run: docker build --file "${{ matrix.dockerfile }}" --tag "argus-${{ matrix.component }}:attested" .
+
+      - name: generate image SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: argus-${{ matrix.component }}:attested
+          format: spdx-json
+          output-file: argus-${{ matrix.component }}.spdx.json
+          syft-version: v1.51.1
+          upload-artifact: false
+          upload-release-assets: false
+          dependency-snapshot: false
+
+      - name: save attestation subject
+        run: |
+          docker save "argus-${{ matrix.component }}:attested" --output "argus-${{ matrix.component }}.image.tar"
+          sha256sum "argus-${{ matrix.component }}.image.tar" > "argus-${{ matrix.component }}.digest.txt"
+
+      - name: attest image build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: argus-${{ matrix.component }}.image.tar
+
+      - name: attest image SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: argus-${{ matrix.component }}.image.tar
+          sbom-path: argus-${{ matrix.component }}.spdx.json
+
+      - name: verify intended subject and reject a modified digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify "argus-${{ matrix.component }}.image.tar" --repo "$GITHUB_REPOSITORY"
+          cp "argus-${{ matrix.component }}.image.tar" "argus-${{ matrix.component }}.tampered.tar"
+          printf 'tampered' >> "argus-${{ matrix.component }}.tampered.tar"
+          if gh attestation verify "argus-${{ matrix.component }}.tampered.tar" --repo "$GITHUB_REPOSITORY"; then
+            echo "modified container artifact unexpectedly verified" >&2
+            exit 1
+          fi
+
+      - name: upload attested subject
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: argus-${{ matrix.component }}-attested
+          path: |
+            argus-${{ matrix.component }}.image.tar
+            argus-${{ matrix.component }}.spdx.json
+            argus-${{ matrix.component }}.digest.txt
+          if-no-files-found: error
