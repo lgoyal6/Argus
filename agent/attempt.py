@@ -102,6 +102,23 @@ class Attempt:
         self.terminal = None
         self.ledger_path = Path(ledger_path)
 
+    @classmethod
+    def from_record(cls, record, ledger_path=DEFAULT_LEDGER):
+        """Rehydrate one durable attempt without creating a second identity."""
+        attempt = cls.__new__(cls)
+        attempt.attempt_id = record["attempt_id"]
+        attempt.run_id = record["run_id"]
+        attempt.trigger = record["trigger"]
+        attempt.created_at = record["created_at"]
+        attempt.approved_action = record.get("approved_action")
+        attempt.resulting_config = record.get("resulting_config")
+        attempt.baseline = record.get("baseline")
+        attempt.observations = list(record.get("observations", []))
+        attempt.outcome = record.get("outcome", REQUESTED)
+        attempt.terminal = record.get("terminal")
+        attempt.ledger_path = Path(ledger_path)
+        return attempt
+
     # ── recording ──────────────────────────────────────────────────────────────
     def record_action(self, action, resulting_config=None):
         """The action that was actually approved and applied, post-sandbox.
@@ -183,8 +200,11 @@ class Attempt:
             self._raise_to(NOT_CORRECTED, evidence)
         else:
             evidence["verdict"] = "trained, and the triggering anomaly no longer fires"
-            self._raise_to(CORRECTED, evidence)
             self.terminal = RESOLVED
+            # Persist the terminal marker in the same append as the corrected
+            # rung. Writing the rung first leaves a restarted worker seeing a
+            # supposedly unfinished attempt even though this process resolved it.
+            self._raise_to(CORRECTED, evidence)
         return self.outcome
 
     def observe_until(self, metrics_file, deadline, poll=lambda: None, clock=time.time):
@@ -289,6 +309,47 @@ def load_ledger(ledger_path=DEFAULT_LEDGER):
                 continue  # a torn final line must not lose the attempts before it
             latest[row["attempt_id"]] = row
     return list(latest.values())
+
+
+def resume_attempt(run_id, trigger, ledger_path=DEFAULT_LEDGER):
+    """Return the newest non-terminal attempt for the same triggering event."""
+    trigger_key = (trigger.get("type"), trigger.get("step"))
+    for record in reversed(load_ledger(ledger_path)):
+        recorded = record.get("trigger") or {}
+        if record.get("run_id") != run_id:
+            continue
+        if (recorded.get("type"), recorded.get("step")) != trigger_key:
+            continue
+        if record.get("terminal") is None:
+            return Attempt.from_record(record, ledger_path=ledger_path)
+        return None
+    return None
+
+
+def reconcile_open_attempts(run_id, metrics_file, ledger_path=DEFAULT_LEDGER):
+    """Re-observe every unfinished attempt after a worker restart.
+
+    The metrics file is append-only. If its fresh-row count has not changed
+    since the last observation, there is no new evidence to append.
+    """
+    row_count = len(_read_rows(metrics_file))
+    reconciled = []
+    for record in load_ledger(ledger_path):
+        if record.get("run_id") != run_id or record.get("terminal") is not None:
+            continue
+        attempt = Attempt.from_record(record, ledger_path=ledger_path)
+        if attempt.baseline is None:
+            continue
+        fresh_rows = max(0, row_count - attempt.baseline["row_count"])
+        last_metrics = next(
+            (item for item in reversed(attempt.observations)
+             if item.get("source") == "metrics_file"),
+            None,
+        )
+        if last_metrics is None or last_metrics.get("fresh_rows") != fresh_rows:
+            attempt.observe(metrics_file)
+        reconciled.append(attempt)
+    return reconciled
 
 
 def _read_rows(metrics_file):

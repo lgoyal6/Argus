@@ -13,7 +13,7 @@ from detector import detect_anomalies, newest_trace_context
 from tools import TOOLS, run_tool
 from prompts import SYSTEM_PROMPT, build_user_prompt
 from logger import log_decision
-from attempt import Attempt, TIMED_OUT
+from attempt import Attempt, TIMED_OUT, reconcile_open_attempts, resume_attempt
 import anthropic
 
 try:  # imported as a package by the tests, flat by the agent image
@@ -35,17 +35,39 @@ COOLDOWN_STEPS = 500      # steps to wait before re-triggering the same anomaly 
 
 # ── agent call ─────────────────────────────────────────────────────────────────
 def run_agent(anomalies):
-    # The model key comes from the resolver rather than the ambient environment, so a
-    # deployed Argus reads it as its own workload identity instead of carrying it in
-    # the image.
-    client = anthropic.Anthropic(api_key=get_secret("ANTHROPIC_API_KEY"))
-
     # One attempt record per invocation, opened before anything is asked for. The
     # trigger is recorded now so the claim at the end can be checked against what
     # actually set it off, and the metrics watermark is captured before any action so
     # "new rows" means new relative to the request rather than to the reply.
-    attempt = Attempt(run_id=RUN_ID, trigger=anomalies[0])
-    attempt.capture_baseline(METRICS_FILE)
+    attempt = resume_attempt(RUN_ID, anomalies[0])
+    resumed = attempt is not None
+    if attempt is None:
+        attempt = Attempt(run_id=RUN_ID, trigger=anomalies[0])
+        attempt.capture_baseline(METRICS_FILE)
+    elif attempt.baseline is None:
+        attempt.capture_baseline(METRICS_FILE)
+    else:
+        # Re-derive the rung from durable metrics before asking for another
+        # action. A trainer may have progressed while the agent was down.
+        attempt.observe(METRICS_FILE)
+
+    if attempt.fixed:
+        final_text = (
+            f"Recovered attempt {attempt.attempt_id}; durable metrics already "
+            "show that the triggering anomaly was corrected."
+        )
+        log_decision(
+            anomalies=anomalies,
+            agent_response=final_text,
+            tools_used=[],
+            status=attempt.status(),
+            attempt=attempt.to_dict(),
+        )
+        return final_text
+
+    # Resolve the model key only when more action is still needed. A recovered
+    # terminal attempt must not pay for or dispatch another model/tool round.
+    client = anthropic.Anthropic(api_key=get_secret("ANTHROPIC_API_KEY"))
 
     user_prompt = build_user_prompt(
         anomalies=anomalies,
@@ -53,6 +75,12 @@ def run_agent(anomalies):
         config_path=CONFIG_PATH,
         training_dir=TRAINING_DIR
     )
+    if resumed:
+        user_prompt += (
+            "\n\nResume recovery attempt " + attempt.attempt_id + ". Its last "
+            "durable action was " + json.dumps(attempt.approved_action) +
+            ". Check current evidence before repeating an action."
+        )
 
     messages = [{"role": "user", "content": user_prompt}]
 
@@ -180,6 +208,11 @@ def poll_once(last_handled, act=None):
                 )
             except Exception:
                 pass
+
+        # A worker may die after dispatching a recovery while the trainer keeps
+        # writing. Reconcile durable open attempts on the next worker's polls so
+        # the original attempt reaches its evidence-backed terminal state.
+        reconcile_open_attempts(RUN_ID, METRICS_FILE)
 
         anomalies = detect_anomalies(METRICS_FILE)
         if not anomalies:
