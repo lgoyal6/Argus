@@ -49,6 +49,21 @@ The injection harness (`inject_anomaly.py`) can simulate any mode on demand (los
 | Dashboard | React, Recharts, Vite |
 | Infra | Docker Compose |
 
+## Credential-free first run
+
+Run one useful detector task immediately after cloning, with no Supabase
+project, model API key, package install, or network call:
+
+```bash
+python3 examples/offline_walkthrough.py
+```
+
+The bundled 21-row training trace ends with a loss spike and gradient
+explosion. The command runs the same detector imported by the agent, prints the
+two findings as JSON, and exits nonzero if the result changes. This walkthrough
+proves local anomaly detection only. The hosted dashboard and autonomous repair
+loop still require the services and credentials in Setup below.
+
 ---
 
 ## Project structure
