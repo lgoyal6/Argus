@@ -44,6 +44,7 @@ from sklearn.preprocessing import StandardScaler
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
+from experiments import artifact_guard as guard
 from experiments import episodes as ep_mod
 from experiments import features as feat
 
@@ -89,6 +90,8 @@ LATENCY_BUDGET_MS = 5.0
 REQUIRE_REAL_EPISODES = True
 
 TRACKING_DIR = REPO / ".agent-work" / "mlflow"
+# Per-version file digests, written at registration and verified at promotion.
+MANIFEST_DIR = TRACKING_DIR / "manifests"
 
 
 # ── provenance ─────────────────────────────────────────────────────────────────
@@ -356,22 +359,56 @@ def main():
     client.set_model_version_tag(REGISTERED_MODEL, v1.version, "kind", "deterministic")
     client.set_model_version_tag(REGISTERED_MODEL, v2.version, "kind", best)
 
+    # Digest each version's files at the moment it is produced, and pin the
+    # manifest's own sha256 on the version as a tag. Without this the digest
+    # check inside guarded_promote has nothing to compare against and silently
+    # does nothing, which is how a wired guard still ends up not guarding.
+    for v in (v1, v2):
+        guard.record_manifest(
+            client, REGISTERED_MODEL, v.version,
+            mlflow.artifacts.download_artifacts(v.source),
+            {"dataset_sha256": dhash, "run_id": client.get_model_version(
+                REGISTERED_MODEL, v.version).run_id},
+            str(MANIFEST_DIR),
+        )
+
     smoke = to_frame(Wte[:200])
     expected = yte[:200]
 
+    # The guarded promotion path. `guarded_promote` runs every artifact check -
+    # provenance, digest, pickle-globals, feature order, staged load, finite
+    # weights, prediction dtype/shape/domain - against the STAGED version and
+    # only moves the production alias if all of them pass. A rejection raises
+    # and leaves the alias untouched, so the prior version keeps serving. This
+    # is the wiring the audit found missing: before, the alias moved first and
+    # nothing was ever checked.
     def promote(version, label):
-        client.set_registered_model_alias(REGISTERED_MODEL, "production", version)
+        report = guard.guarded_promote(
+            client, REGISTERED_MODEL, version, alias="production",
+            canary_frame=smoke,
+            canary_expected_rows=int(smoke["window_id"].nunique()),
+            expected_feature_order=feat.FEATURE_NAMES,
+            expected_dataset_sha256=dhash,
+            manifest_dir=str(MANIFEST_DIR),
+        )
         m = mlflow.pyfunc.load_model(f"models:/{REGISTERED_MODEL}@production")
         pred = np.asarray(m.predict(smoke)).ravel()
         agree = float((pred == expected).mean())
-        print(f"  promoted v{version} ({label}): serves {len(pred)} windows, "
-              f"agreement with labels {agree:.4f}")
+        passed = [c["check"] for c in report["checks"]]
+        print(f"  promoted v{version} ({label}): {len(passed)} checks passed "
+              f"{passed}; serves {len(pred)} windows, agreement {agree:.4f}")
         return agree
 
-    print("\n── promotion and rollback ──")
-    promote(v2.version, best)
-    if not verdict[best]["promotable"]:
-        print(f"  v{v2.version} did not clear its gates; rolling back")
+    print("\n── promotion and rollback (guarded) ──")
+    if verdict[best]["promotable"]:
+        promote(v2.version, best)
+    else:
+        # v2 did not clear its quality/latency gates, so it is never promoted:
+        # the deterministic baseline is what goes to production. Validation is a
+        # separate gate from quality - a well-formed artifact that is simply not
+        # good enough still must not be activated.
+        print(f"  v{v2.version} ({best}) did not clear its quality/latency gates; "
+              "not promoting it")
     promote(v1.version, "deterministic")
     current = client.get_model_version_by_alias(REGISTERED_MODEL, "production")
     print(f"  production alias now points at v{current.version} "
