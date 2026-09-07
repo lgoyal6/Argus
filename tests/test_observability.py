@@ -404,3 +404,202 @@ def test_a_missing_metrics_file_is_a_different_dependency_than_a_failing_sink(tm
     assert obs.read_counter("argus_ingest_failures_total",
                             dependency="supabase", reason="auth") == 0
     assert [r["event"] for r in records if r["level"] == "error"] == ["ingest.metrics_file_missing"]
+
+
+# -- 4. the same three properties, under the OpenTelemetry wiring ---------------
+# The section above proves what the log records carry. These prove the same things
+# about what the SPANS carry, which is a different exit from the process: an
+# attribute reaches a trace backend that retains it and shows it to anyone with the
+# URL, and none of the rules above apply to it automatically.
+
+@pytest.fixture(scope="session")
+def _collector():
+    """One exporter for the whole session.
+
+    The OpenTelemetry SDK installs a global tracer provider once per process and
+    refuses to replace it, so a per-test provider would be built, ignored, and the
+    spans would go to the first test's exporter. One collector, cleared per test.
+    """
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    shutdown = obs.setup_tracing("argus-test", exporter=exporter)
+    yield exporter
+    obs.flush()
+    shutdown()
+
+
+@pytest.fixture
+def exported(_collector):
+    """Spans this module actually emitted, read back from a real SDK exporter."""
+    # Re-arms the flag, which another test may have turned off by configuring no
+    # collector; the provider installed by _collector is the one still in use.
+    obs.setup_tracing("argus-test", exporter=_collector)
+    _collector.clear()
+    yield _collector
+    obs.flush()
+
+
+def test_a_config_never_becomes_a_span_attribute(exported):
+    """The rule that matters most: a config dict is where the Supabase key lives."""
+    with obs.span("ingest.batch", config={"SUPABASE_KEY": "eyJhbGciOi.eyJzdWIiOi.SflKxwRJSM"}):
+        pass
+    obs.flush()
+    attrs = dict(exported.get_finished_spans()[0].attributes)
+    assert attrs["config"] == "<dict keys=1>"
+    assert not any("eyJhbGciOi" in str(v) for v in attrs.values())
+
+
+@pytest.mark.parametrize("secret", [
+    "eyJhbGciOi.eyJzdWIiOi.SflKxwRJSM",
+    "sk-ant-abcdefgh12345678",
+    "authorization: Bearer abcdefgh12345678",
+])
+def test_a_credential_never_becomes_a_span_attribute(exported, secret):
+    with obs.span("recovery.rerun_request", detail=f"refused: {secret}"):
+        pass
+    obs.flush()
+    attrs = dict(exported.get_finished_spans()[0].attributes)
+    assert secret not in attrs["detail"]
+    assert obs.REDACTED in attrs["detail"]
+
+
+def test_an_exception_message_is_scrubbed_before_it_reaches_the_span(exported, monkeypatch):
+    """The SDK's own exception recorder is turned off for exactly this reason: it
+    puts str(exc) on the span untouched, and an exception message here is a string
+    obs.py has never seen."""
+    monkeypatch.setenv("SUPABASE_KEY", "notashapeanyoneknows123")
+    with pytest.raises(RuntimeError):
+        with obs.span("ingest.batch"):
+            raise RuntimeError("sink refused notashapeanyoneknows123")
+    obs.flush()
+    span = exported.get_finished_spans()[0]
+    events = [e for e in span.events if e.name == "exception"]
+    assert events, "the failure was not recorded on the span at all"
+    assert "notashapeanyoneknows123" not in str(dict(events[0].attributes))
+
+
+def test_a_measurement_never_becomes_a_span_attribute(exported):
+    with obs.span("detection.cycle", train_loss=0.213, zscore=7.4):
+        pass
+    obs.flush()
+    attrs = dict(exported.get_finished_spans()[0].attributes)
+    assert attrs["train_loss"] == "<float>"
+    assert attrs["zscore"] == "<float>"
+
+
+def test_identifiers_are_span_attributes_and_still_never_metric_labels(exported):
+    """The whole reason both exist. A run id on a span is the point of tracing; the
+    same string as a Prometheus label is one series per training run forever."""
+    with obs.bind(run_id=RUN_ID):
+        with obs.span("ingest.batch", dependency="supabase"):
+            obs.incr("argus_ingest_rows_total", outcome="ok")
+    obs.flush()
+
+    # It is on the trace: the trace id and the run id can be joined through the log
+    # record the span emitted, which carries both.
+    assert exported.get_finished_spans()[0].context.trace_id != 0
+
+    # And it is not, and cannot be, a metric label.
+    for name, spec in obs.declared().items():
+        assert not (set(spec["labels"]) & obs.FORBIDDEN_LABELS), name
+    with pytest.raises(obs.CardinalityError):
+        obs.declare_counter("argus_test_total", {"run_id": ("a", "b")})
+
+
+def test_the_series_bound_is_the_same_with_tracing_on(exported):
+    """Tracing adds no metric. The bound proved by declare_counter is a bound on the
+    whole registry, so this is the number that must not move."""
+    with obs.span("ingest.batch", dependency="supabase"):
+        for _ in range(50):
+            obs.incr("argus_detection_anomalies_total", type="loss_spike")
+            obs.incr("argus_dependency_calls_total", dependency="supabase", outcome="ok")
+    total = sum(obs.max_series(name) for name in obs.declared())
+    assert total <= 50, f"registry can reach {total} series"
+    assert all(len(series) <= obs.max_series(name)
+               for name, series in obs.snapshot().items())
+
+
+# -- the queue hop -------------------------------------------------------------
+
+def test_the_context_travels_on_the_row_and_is_stripped_before_the_database():
+    """`_trace` is a message header, not a column. A row that reached the metrics
+    table carrying one would be an insert against a column the schema does not
+    have."""
+    with obs.capture():
+        row = obs.attach_trace({"step": 7, "train_loss": 0.4})
+    # Tracing is off in this test, so there is no header to attach.
+    assert obs.TRACE_FIELD not in row
+
+    carried = {"step": 7, "train_loss": 0.4,
+               obs.TRACE_FIELD: "00-" + "a" * 32 + "-" + "b" * 16 + "-01"}
+    stripped, traceparent = obs.take_trace(carried)
+    assert obs.TRACE_FIELD not in stripped
+    assert stripped == {"step": 7, "train_loss": 0.4}
+    assert traceparent.startswith("00-")
+
+
+def test_the_row_reaching_the_sink_has_no_telemetry_on_it(monkeypatch, tmp_path):
+    """The end-to-end version of the rule above, through db.insert_metrics."""
+    import db as db_module
+
+    metrics_file = tmp_path / "metrics.jsonl"
+    header = "00-" + "a" * 32 + "-" + "b" * 16 + "-01"
+    metrics_file.write_text(
+        json.dumps({"step": 1, "train_loss": 0.5, obs.TRACE_FIELD: header}) + "\n")
+
+    sent = []
+
+    class FakeTable:
+        def upsert(self, rows, on_conflict=None):
+            sent.extend(rows)
+            return self
+
+        def execute(self):
+            return self
+
+    class FakeClient:
+        def table(self, name):
+            return FakeTable()
+
+    monkeypatch.setattr(db_module, "get_client", lambda: FakeClient())
+    monkeypatch.setenv("ARGUS_WORKSPACE", str(tmp_path))
+    db_module.insert_metrics("run-1", str(metrics_file))
+
+    assert sent, "nothing was written to the sink"
+    assert all(obs.TRACE_FIELD not in row for row in sent), sent
+
+
+def test_a_consumer_takes_the_caller_in_scope_over_the_message_header(exported):
+    """A queue consumer has two candidate parents and must not take both: taking the
+    message's header while a caller is already in scope moves the span into a
+    different trace from its own caller and splits the request in two."""
+    header = "00-" + "a" * 32 + "-" + "b" * 16 + "-01"
+    assert obs.inherited_or(header) == header, "no caller in scope: the row is the parent"
+    with obs.span("agent.poll"):
+        assert obs.inherited_or(header) is None, "a caller is in scope and wins"
+
+
+# -- the cost of being off -----------------------------------------------------
+
+def test_tracing_is_a_no_op_with_no_collector_configured(_collector, monkeypatch):
+    """Not "no trace id leaks" - no span is BUILT. A deployment with no collector is
+    the common one, and it must pay for a dict lookup, not for an SDK span it then
+    drops. Takes the session collector so the claim is checked against a sink that
+    would have received anything that was built."""
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    obs.setup_tracing("argus-test")
+    _collector.clear()
+    assert not obs.tracing_enabled()
+    assert obs.current_traceparent() is None
+    assert obs.current_trace_id() is None
+    with obs.capture() as records:
+        with obs.span("detection.cycle") as span:
+            span.failed("nope")
+            span.set(extra="x")
+            span.rename("still fine")
+    assert _collector.get_finished_spans() == (), "a span was built with no collector"
+    # The records this module has always emitted are unchanged.
+    assert [r["event"] for r in records] == ["detection.cycle.start", "detection.cycle.end"]
+    assert records[-1]["outcome"] == "nope"
+    assert "trace_id" not in records[-1]
