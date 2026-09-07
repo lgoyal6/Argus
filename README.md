@@ -109,6 +109,33 @@ ANTHROPIC_API_KEY=<your-key>
 VITE_API_URL=http://localhost:8000
 ```
 
+### Deployed: runtime secrets from Secret Manager
+
+Local development reads `.env` as above. A deployed Argus does not: setting
+`ARGUS_SECRET_PROJECT` makes `SUPABASE_KEY` and `ANTHROPIC_API_KEY` come from
+Google Secret Manager instead, read as the service account attached to the
+workload, with no key file and nothing baked into the image.
+
+```
+ARGUS_SECRET_PROJECT=your-gcp-project   # unset for local .env behaviour
+```
+
+The secrets are named `argus-supabase-key` and `argus-model-key`, and each is
+granted separately, so the service account can read its own and nothing else.
+
+`SUPABASE_URL` and `VITE_API_URL` are configuration rather than credentials and
+stay in the environment either way.
+
+Two behaviours worth knowing, both covered by `tests/test_argus_secrets.py`: a
+Secret Manager value overrides a stale environment value rather than the other
+way round, and a permission denial is raised rather than falling back to the
+environment, so revoking access fails visibly instead of quietly continuing on
+whatever the environment still holds.
+
+```bash
+python3 tests/test_argus_secrets.py
+```
+
 ### 2. Create Supabase tables
 
 Run in the Supabase SQL editor:
