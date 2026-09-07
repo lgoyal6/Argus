@@ -316,6 +316,34 @@
     "/runs/": {
       "get": {
         "operationId": "get_runs_runs__get",
+        "parameters": [
+          {
+            "description": "maximum runs to return, newest first",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "maximum runs to return, newest first",
+              "maximum": 5000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "runs to skip, newest first",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "runs to skip, newest first",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -330,6 +358,26 @@
               }
             },
             "description": "Successful Response"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the request asked for more rows than one request may read"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           },
           "500": {
             "content": {
@@ -534,6 +582,16 @@
             },
             "description": "the addressed run does not exist"
           },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the request asked for more rows than one request may read"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -715,6 +773,16 @@
               }
             },
             "description": "the addressed run does not exist"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "the request asked for more rows than one request may read"
           },
           "422": {
             "content": {

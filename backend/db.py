@@ -9,13 +9,23 @@ from supabase import create_client, Client
 
 try:  # imported as a package by the tests, flat by the backend image
     from backend.tailer import MetricsTailer
+    from backend import tailer as tailer_defaults
 except ImportError:  # pragma: no cover - exercised only by the flat layout
     from tailer import MetricsTailer
+    import tailer as tailer_defaults
 
 try:  # same two layouts; see the note above
     from backend.argus_secrets import get_secret
 except ImportError:  # pragma: no cover - exercised only by the flat layout
     from argus_secrets import get_secret
+
+# Plain, and deliberately NOT under the try/except above. limits reads its numbers at
+# import time, and tests/test_abuse_limits.py configures a different bound by dropping
+# "limits" from sys.modules and re-importing, which is the code path an operator gets
+# by setting the variable and restarting. Binding `backend.limits` here would leave
+# this module holding the first import's numbers while the test re-imported the other
+# name, so the re-import would appear to work and change nothing.
+import limits
 
 # obs.py lives at the repository root and is copied to /app by both Dockerfiles, so it
 # is flat in the image and importable from the repository root. It is not inside either
@@ -35,6 +45,11 @@ def get_client() -> Client:
 
 
 # ── runs ───────────────────────────────────────────────────────────────────────
+# Default page sizes for the two collections that have no whole-object read.
+DEFAULT_RUN_PAGE = 200
+DEFAULT_DECISION_PAGE = 500
+
+
 def create_run(name, config_path, metrics_file, training_dir):
     client = get_client()
     run = {
@@ -51,10 +66,20 @@ def create_run(name, config_path, metrics_file, training_dir):
     return run
 
 
-def get_runs():
+def get_runs(limit=None, offset=0):
+    """The run index grows without bound as runs accumulate; page it.
+
+    Unlike a metrics series, this has no natural whole-object read: nothing charts
+    every run that ever existed. So an absent `limit` takes a default page here
+    rather than meaning "all of them", and the default is still checked against the
+    work bound so the two cannot disagree.
+    """
+    if limit is None:
+        limit = min(limits.MAX_WORK_UNITS or DEFAULT_RUN_PAGE, DEFAULT_RUN_PAGE)
+    limits.check_work(limit, "rows")
     client = get_client()
     response = client.table("runs").select("*").order("created_at", desc=True).execute()
-    return response.data
+    return _page(response.data, limit, offset)
 
 
 def get_run(run_id):
@@ -86,7 +111,19 @@ def _tailer_for(run_id, metrics_file):
     t = _tailers.get(run_id)
     if t is None or str(t.path) != str(metrics_file):
         state = Path(metrics_file).with_suffix(Path(metrics_file).suffix + f".cursor-{run_id}")
-        t = MetricsTailer(metrics_file, state_path=state)
+        # The two per-poll caps are the ingest bound, and an operator tunes them
+        # through the same variables as every other limit. They can only tighten the
+        # tailer's own defaults, never loosen them: a bound that an environment
+        # variable can raise without limit is not a bound. 0 means "not configured",
+        # which leaves the default in force rather than removing it.
+        t = MetricsTailer(
+            metrics_file,
+            state_path=state,
+            max_lines=min(limits.MAX_WORK_UNITS or tailer_defaults.DEFAULT_MAX_LINES,
+                          tailer_defaults.DEFAULT_MAX_LINES),
+            max_bytes=min(limits.MAX_INGEST_BYTES or tailer_defaults.DEFAULT_MAX_BYTES,
+                          tailer_defaults.DEFAULT_MAX_BYTES),
+        )
         _tailers[run_id] = t
     return t
 
@@ -213,9 +250,22 @@ def _ingest_failure_reason(exc):
 
 
 def get_metrics(run_id, limit=None, offset=0):
+    """Read a metrics series, bounded by rows.
+
+    `limit=None` still means the whole series, because the dashboard charts a whole
+    run and a silent default page size would truncate every chart. What it no longer
+    means is "however many rows there are": above MAX_WORK_UNITS the request is
+    refused with a 413 that names `limit` and `offset`, so a caller asking for a
+    million rows is told how to page rather than served or silently cut short.
+    """
+    if limit is not None:
+        # Checked before the query, so an oversized explicit ask costs nothing.
+        limits.check_work(limit, "rows")
     client = get_client()
     with obs.span("db.select", kind="client", dependency="supabase", table="metrics"):
         response = client.table("metrics").select("*").eq("run_id", run_id).order("step").execute()
+    if limit is None:
+        limits.check_work(len(response.data), "rows")
     return _page(response.data, limit, offset)
 
 
@@ -251,6 +301,10 @@ def insert_decision(run_id, decision_payload):
 
 
 def get_decisions(run_id, limit=None, offset=0):
+    """One decision row per agent intervention; bounded the same way as the runs index."""
+    if limit is None:
+        limit = min(limits.MAX_WORK_UNITS or DEFAULT_DECISION_PAGE, DEFAULT_DECISION_PAGE)
+    limits.check_work(limit, "rows")
     client = get_client()
     response = client.table("decisions").select("*").eq("run_id", run_id).order("timestamp", desc=True).execute()
     return _page(response.data, limit, offset)

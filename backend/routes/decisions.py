@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Query
 from schemas import Decision
-from errors import (DECISION_WRITE_RESPONSES, ERROR_RESPONSES, conflict,
+from errors import (DECISION_WRITE_RESPONSES, PAGED_READ_RESPONSES, conflict,
                     internal_error, not_found)
 import db
+import limits
 
 router = APIRouter()
 
@@ -10,7 +11,8 @@ MAX_PAGE = 5000
 
 
 # ── get decisions for a run ────────────────────────────────────────────────────
-@router.get("/{run_id}/decisions", response_model=list[Decision], responses=ERROR_RESPONSES)
+@router.get("/{run_id}/decisions", response_model=list[Decision],
+            responses=PAGED_READ_RESPONSES)
 def get_decisions(
     run_id: str,
     # See routes/metrics.py: optional is not nullable, and `int | None` published a
@@ -27,6 +29,8 @@ def get_decisions(
         raise not_found()
     try:
         return db.get_decisions(run_id, limit=limit, offset=offset)
+    except limits.WorkLimitExceeded:
+        raise  # a chosen refusal, not an internal failure; see routes/runs.py
     except Exception as e:
         raise internal_error(e, "get_decisions")
 

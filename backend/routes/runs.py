@@ -1,21 +1,36 @@
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from schemas import RunCreate, Run
-from errors import (COLLECTION_RESPONSES, COLLECTION_WRITE_RESPONSES, ERROR_RESPONSES,
-                    STATUS_RESPONSES, bad_request, internal_error, not_found)
+from errors import (COLLECTION_READ_RESPONSES, COLLECTION_WRITE_RESPONSES,
+                    ERROR_RESPONSES, STATUS_RESPONSES, bad_request, internal_error,
+                    not_found)
 import db
+import limits
 
 router = APIRouter()
 
 VALID_STATUSES = ["running", "completed", "failed"]
 
+MAX_PAGE = 5000
+
 
 # ── get all runs ───────────────────────────────────────────────────────────────
-@router.get("/", response_model=list[Run], responses=COLLECTION_RESPONSES)
-def get_runs():
+@router.get("/", response_model=list[Run], responses=COLLECTION_READ_RESPONSES)
+def get_runs(
+    # See routes/metrics.py: optional is not nullable, and `int | None` published a
+    # `null` branch the query parser rejects.
+    limit: int = Query(None, ge=1, le=MAX_PAGE,
+                       description="maximum runs to return, newest first"),
+    offset: int = Query(0, ge=0, description="runs to skip, newest first"),
+):
     try:
-        return db.get_runs()
+        return db.get_runs(limit=limit, offset=offset)
+    except limits.WorkLimitExceeded:
+        # Ahead of the generic handler on purpose. This is a refusal the service
+        # chose, with a status and a message of its own; funnelling it into
+        # internal_error would report a deliberate 413 as an unexplained 500.
+        raise
     except Exception as e:
         raise internal_error(e, "get_runs")
 
