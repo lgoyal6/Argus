@@ -7,7 +7,7 @@ where both packages exist. That gap is silent in the worst possible way - a
 package-qualified `from agent.sandbox import ...` passes every test and crashes the
 container on the first import - so it gets a test of its own rather than a comment.
 
-Two rules, checked statically so this needs no runtime dependency and runs in CI:
+Three rules, checked statically so this needs no runtime dependency and runs in CI:
 
 1. A first-party package-qualified import must sit under a `try/except ImportError`
    with a flat fallback. That is the pattern already used by agent/attempt.py,
@@ -16,6 +16,11 @@ Two rules, checked statically so this needs no runtime dependency and runs in CI
    the package directory, must be copied into the image by that package's Dockerfile.
    `obs.py` is the case: both trees do `import obs`, and without the matching `COPY`
    the image starts and immediately dies.
+3. The same rule for a module that lives in the *other* first-party package.
+   `argus_secrets.py` is the case: it belongs to `backend/` and `agent/` imports it by
+   plain name, which resolves in the image only because `docker/Dockerfile.agent`
+   copies that one file in. Rule 2 does not cover it, because the module is not at the
+   repository root, and nothing else would notice it going missing.
 """
 
 import ast
@@ -118,3 +123,46 @@ def test_repository_root_modules_are_copied_into_the_image(package):
         f"while the suite stayed green."
     )
     assert needed, "expected at least one shared root module; has obs.py moved?"
+
+
+def _plain_imports(package):
+    """Plain, unqualified, absolute imports made anywhere in a package."""
+    names = set()
+    for path in _sources(package):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(a.name for a in node.names if "." not in a.name)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                if "." not in node.module:
+                    names.add(node.module)
+    return names
+
+
+@pytest.mark.parametrize("package", sorted(PACKAGES))
+def test_modules_borrowed_from_the_other_package_are_copied_into_the_image(package):
+    """A module owned by the other package, imported here by plain name.
+
+    Shared rather than duplicated is the right call, but it means the image only
+    works because one COPY line names one file. Deleting that line leaves every test
+    green - the suite runs from the repository root, where both packages are
+    importable - and breaks the container on its first import.
+    """
+    others = {p: {s.stem for s in (ROOT / p).glob("*.py")}
+              for p in FIRST_PARTY if p != package}
+    mine = {s.stem for s in (ROOT / package).glob("*.py")}
+    copied = _copied_sources(PACKAGES[package])
+
+    missing = []
+    for name in sorted(_plain_imports(package)):
+        if name in mine or name in ROOT_MODULES:
+            continue
+        for other, modules in others.items():
+            if name in modules and f"{other}/{name}.py" not in copied:
+                missing.append(f"{other}/{name}.py")
+
+    assert not missing, (
+        f"{PACKAGES[package].relative_to(ROOT)} does not COPY {missing}, which "
+        f"{package}/ imports by plain name from the other package. The image would "
+        f"start and die on import while the suite stayed green."
+    )
