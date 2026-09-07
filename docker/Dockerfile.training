@@ -12,5 +12,10 @@ RUN pip install "numpy<2"
 RUN pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
 RUN pip install torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cpu
 RUN pip install fastapi uvicorn
+# train.py and server.py both import obs, which reaches for these as soon as
+# OTEL_EXPORTER_OTLP_ENDPOINT is set. This image installs package by package
+# rather than from training_job/requirements.txt, so the declaration has to be
+# here too; the requirements file carries it for anyone running train.py directly.
+RUN pip install "opentelemetry-sdk>=1.44,<2" "opentelemetry-exporter-otlp-proto-http>=1.44,<2"
 COPY training_job/ .
 CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port 8001 & python3 train.py"]

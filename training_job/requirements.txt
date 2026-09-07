@@ -1,1 +1,6 @@
 pyyaml>=6.0
+
+# See the note in backend/requirements.txt. docker/Dockerfile.training does not
+# install from this file, so the same two lines are on its pip install as well.
+opentelemetry-sdk>=1.44,<2
+opentelemetry-exporter-otlp-proto-http>=1.44,<2
