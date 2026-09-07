@@ -14,33 +14,37 @@ import { getMetrics } from "../api";
 
 export default function MetricsChart({ runId, isLive }) {
   const [metrics, setMetrics] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loadedRunId, setLoadedRunId] = useState(null);
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
 
   useEffect(() => {
     if (!runId) return;
-    setLoading(true);
-    fetchMetrics();
+
+    let cancelled = false;
+    const fetchMetrics = async () => {
+      try {
+        const res = await getMetrics(runId);
+        if (cancelled) return;
+        setMetrics(res.data);
+        setLastUpdated(new Date());
+        setError(null);
+      } catch {
+        if (!cancelled) setError("could not load metrics");
+      } finally {
+        if (!cancelled) setLoadedRunId(runId);
+      }
+    };
+
+    void fetchMetrics();
 
     // Only keep polling while the run is live
-    if (!isLive) return;
-    const interval = setInterval(fetchMetrics, 5000);
-    return () => clearInterval(interval);
+    const interval = isLive ? setInterval(fetchMetrics, 5000) : null;
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
   }, [runId, isLive]);
-
-  const fetchMetrics = async () => {
-    try {
-      const res = await getMetrics(runId);
-      setMetrics(res.data);
-      setLastUpdated(new Date());
-      setError(null);
-    } catch (e) {
-      setError("could not load metrics");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // Find steps where anomalies were injected
   const anomalySteps = metrics
@@ -48,7 +52,7 @@ export default function MetricsChart({ runId, isLive }) {
     .map((m) => m.step);
 
   if (!runId) return <div style={styles.empty}>select a run to view metrics</div>;
-  if (loading) return <div style={styles.empty}>loading metrics...</div>;
+  if (loadedRunId !== runId) return <div style={styles.empty}>loading metrics...</div>;
   if (error) return <div style={styles.empty}>{error}</div>;
   if (metrics.length === 0) return <div style={styles.empty}>no metrics yet</div>;
 

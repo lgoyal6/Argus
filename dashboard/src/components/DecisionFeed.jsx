@@ -5,32 +5,36 @@ const RESPONSE_PREVIEW_LENGTH = 300;
 
 export default function DecisionFeed({ runId, isLive }) {
   const [decisions, setDecisions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loadedRunId, setLoadedRunId] = useState(null);
   const [error, setError] = useState(null);
   const [expanded, setExpanded] = useState(new Set());
 
   useEffect(() => {
     if (!runId) return;
-    setLoading(true);
-    fetchDecisions();
+
+    let cancelled = false;
+    const fetchDecisions = async () => {
+      try {
+        const res = await getDecisions(runId);
+        if (cancelled) return;
+        setDecisions(res.data);
+        setError(null);
+      } catch {
+        if (!cancelled) setError("could not load decisions");
+      } finally {
+        if (!cancelled) setLoadedRunId(runId);
+      }
+    };
+
+    void fetchDecisions();
 
     // Only keep polling while the run is live
-    if (!isLive) return;
-    const interval = setInterval(fetchDecisions, 5000);
-    return () => clearInterval(interval);
+    const interval = isLive ? setInterval(fetchDecisions, 5000) : null;
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
   }, [runId, isLive]);
-
-  const fetchDecisions = async () => {
-    try {
-      const res = await getDecisions(runId);
-      setDecisions(res.data);
-      setError(null);
-    } catch (e) {
-      setError("could not load decisions");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const toggleExpanded = (id) => {
     setExpanded((prev) => {
@@ -49,7 +53,7 @@ export default function DecisionFeed({ runId, isLive }) {
   const formatTime = (ts) => new Date(ts * 1000).toLocaleTimeString();
 
   if (!runId) return <div style={styles.empty}>select a run to view agent decisions</div>;
-  if (loading) return <div style={styles.empty}>loading decisions...</div>;
+  if (loadedRunId !== runId) return <div style={styles.empty}>loading decisions...</div>;
   if (error) return <div style={styles.empty}>{error}</div>;
   if (decisions.length === 0) return <div style={styles.empty}>no agent decisions yet</div>;
 
