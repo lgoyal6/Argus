@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getRuns } from "../api";
+import { getRuns, isDemoMode } from "../api";
 
 export default function RunSelector({ selectedRun, onSelect }) {
   const [runs, setRuns] = useState([]);
@@ -23,10 +23,10 @@ export default function RunSelector({ selectedRun, onSelect }) {
     };
 
     void fetchRuns();
-    const interval = setInterval(fetchRuns, 10000);
+    const interval = isDemoMode ? null : setInterval(fetchRuns, 10000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
     };
   }, []);
 
@@ -47,9 +47,9 @@ export default function RunSelector({ selectedRun, onSelect }) {
   }, [runs, selectedRun, onSelect]);
 
   const statusColor = (status) => {
-    if (status === "running") return "#22c55e";
-    if (status === "completed") return "#3b82f6";
-    if (status === "failed") return "#ef4444";
+    if (status === "running") return "#15803d";
+    if (status === "completed") return "#2563eb";
+    if (status === "failed") return "#b91c1c";
     return "#888";
   };
 
@@ -61,8 +61,9 @@ export default function RunSelector({ selectedRun, onSelect }) {
 
   return (
     <div style={styles.container}>
-      <label style={styles.label}>training run</label>
+      <label htmlFor="training-run" style={styles.label}>training run</label>
       <select
+        id="training-run"
         style={styles.select}
         value={selectedRun?.id || ""}
         onChange={(e) => onSelect(runs.find((r) => r.id === e.target.value))}
@@ -132,6 +133,6 @@ const styles = {
     borderRadius: "999px",
     fontSize: "12px",
     color: "#fff",
-    fontWeight: 500,
+    fontWeight: 600,
   },
 };

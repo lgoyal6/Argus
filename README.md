@@ -64,6 +64,13 @@ two findings as JSON, and exits nonzero if the result changes. This walkthrough
 proves local anomaly detection only. The hosted dashboard and autonomous repair
 loop still require the services and credentials in Setup below.
 
+### Public dashboard
+
+[Open the credential-free Argus dashboard](https://lgoyal6.github.io/Argus/).
+It replays the same bundled 21-row trace in a read-only dashboard and labels it
+as demo data. The charts and detector findings run without credentials. The
+public page does not run the model-backed repair loop, backend, or Supabase.
+
 ---
 
 ## Project structure

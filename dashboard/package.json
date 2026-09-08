@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/generate-demo-fixture.mjs",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:demo": "node --test scripts/generate-demo-fixture.test.mjs"
   },
   "dependencies": {
     "axios": "^1.20.0",

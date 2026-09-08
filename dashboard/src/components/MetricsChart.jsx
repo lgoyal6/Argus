@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import { getMetrics } from "../api";
 
-export default function MetricsChart({ runId, isLive }) {
+export default function MetricsChart({ runId, isLive, demoMode = false }) {
   const [metrics, setMetrics] = useState([]);
   const [loadedRunId, setLoadedRunId] = useState(null);
   const [error, setError] = useState(null);
@@ -62,7 +62,7 @@ export default function MetricsChart({ runId, isLive }) {
         <h2 style={styles.title}>training metrics</h2>
         {lastUpdated && (
           <span style={styles.lastUpdated}>
-            updated {lastUpdated.toLocaleTimeString()}
+            {demoMode ? `${metrics.length} bundled samples` : `updated ${lastUpdated.toLocaleTimeString()}`}
             {!isLive && <span style={styles.staticBadge}>static</span>}
           </span>
         )}
@@ -78,7 +78,7 @@ export default function MetricsChart({ runId, isLive }) {
               dataKey="step"
               stroke="#555"
               tick={{ fill: "#888", fontSize: 11 }}
-              label={{ value: "step", position: "insideBottom", offset: -2, fill: "#555", fontSize: 11 }}
+              label={{ value: "step", position: "insideBottom", offset: -2, fill: "#8c8c8c", fontSize: 11 }}
             />
             <YAxis stroke="#555" tick={{ fill: "#888", fontSize: 11 }} />
             <Tooltip
@@ -90,8 +90,8 @@ export default function MetricsChart({ runId, isLive }) {
             {anomalySteps.map((step) => (
               <ReferenceLine key={step} x={step} stroke="#ef4444" strokeDasharray="4 4" />
             ))}
-            <Line type="monotone" dataKey="train_loss" stroke="#3b82f6" dot={false} strokeWidth={1.5} />
-            <Line type="monotone" dataKey="val_loss" stroke="#f59e0b" dot={false} strokeWidth={1.5} />
+            <Line type="monotone" dataKey="train_loss" stroke="#3b82f6" dot={false} strokeWidth={1.5} isAnimationActive={!demoMode} />
+            <Line type="monotone" dataKey="val_loss" stroke="#f59e0b" dot={false} strokeWidth={1.5} isAnimationActive={!demoMode} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -116,7 +116,7 @@ export default function MetricsChart({ runId, isLive }) {
             {anomalySteps.map((step) => (
               <ReferenceLine key={step} x={step} stroke="#ef4444" strokeDasharray="4 4" />
             ))}
-            <Line type="monotone" dataKey="grad_norm" stroke="#22c55e" dot={false} strokeWidth={1.5} />
+            <Line type="monotone" dataKey="grad_norm" stroke="#22c55e" dot={false} strokeWidth={1.5} isAnimationActive={!demoMode} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -141,7 +141,7 @@ export default function MetricsChart({ runId, isLive }) {
             {anomalySteps.map((step) => (
               <ReferenceLine key={step} x={step} stroke="#ef4444" strokeDasharray="4 4" />
             ))}
-            <Line type="monotone" dataKey="val_acc" stroke="#a855f7" dot={false} strokeWidth={1.5} />
+            <Line type="monotone" dataKey="val_acc" stroke="#a855f7" dot={false} strokeWidth={1.5} isAnimationActive={!demoMode} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -170,7 +170,7 @@ const styles = {
   },
   lastUpdated: {
     fontSize: "11px",
-    color: "#555",
+    color: "#8c8c8c",
     display: "flex",
     alignItems: "center",
     gap: "6px",
@@ -179,7 +179,7 @@ const styles = {
     padding: "2px 6px",
     borderRadius: "4px",
     backgroundColor: "#1e1e1e",
-    color: "#666",
+    color: "#b3b3b3",
     fontSize: "10px",
   },
   chartWrap: {

@@ -2,6 +2,8 @@ import { useState } from "react";
 import RunSelector from "./components/RunSelector";
 import MetricsChart from "./components/MetricsChart";
 import DecisionFeed from "./components/DecisionFeed";
+import { isDemoMode } from "./api";
+import "./App.css";
 
 export default function App() {
   const [selectedRun, setSelectedRun] = useState(null);
@@ -9,10 +11,10 @@ export default function App() {
   const isLive = selectedRun?.status === "running";
 
   return (
-    <div style={styles.root}>
+    <div className="app-shell" style={styles.root}>
 
       {/* header */}
-      <div style={styles.header}>
+      <div className="app-header" style={styles.header}>
         <div style={styles.headerLeft}>
           <span style={styles.logo}>Argus</span>
           <span style={styles.tagline}>autonomous ml training debugger</span>
@@ -23,17 +25,37 @@ export default function App() {
         />
       </div>
 
+      {isDemoMode && (
+        <aside className="demo-notice" aria-label="Public demo scope">
+          <div>
+            <strong>Bundled demo data</strong>
+            <span>21 training samples, 2 detector findings, read-only</span>
+          </div>
+          <p>
+            This page replays the repository fixture through Argus&apos;s real detector.
+            No model API, backend, Supabase, or repair action runs here.
+          </p>
+          <a
+            href="https://github.com/lgoyal6/Argus/blob/main/examples/sample_metrics.jsonl"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Inspect the source fixture
+          </a>
+        </aside>
+      )}
+
       {/* main content */}
-      <div style={styles.body}>
+      <div className="app-body" style={styles.body}>
 
         {/* left: metrics */}
         <div style={styles.left}>
-          <MetricsChart runId={selectedRun?.id} isLive={isLive} />
+          <MetricsChart runId={selectedRun?.id} isLive={isLive} demoMode={isDemoMode} />
         </div>
 
         {/* right: agent decisions */}
         <div style={styles.right}>
-          <DecisionFeed runId={selectedRun?.id} isLive={isLive} />
+          <DecisionFeed runId={selectedRun?.id} isLive={isLive} demoMode={isDemoMode} />
         </div>
 
       </div>
@@ -71,12 +93,9 @@ const styles = {
   },
   tagline: {
     fontSize: "13px",
-    color: "#555",
+    color: "#8c8c8c",
   },
   body: {
-    display: "grid",
-    gridTemplateColumns: "1fr 420px",
-    gap: "20px",
     alignItems: "start",
   },
   left: {

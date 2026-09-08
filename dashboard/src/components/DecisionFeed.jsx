@@ -3,7 +3,7 @@ import { getDecisions } from "../api";
 
 const RESPONSE_PREVIEW_LENGTH = 300;
 
-export default function DecisionFeed({ runId, isLive }) {
+export default function DecisionFeed({ runId, isLive, demoMode = false }) {
   const [decisions, setDecisions] = useState([]);
   const [loadedRunId, setLoadedRunId] = useState(null);
   const [error, setError] = useState(null);
@@ -44,9 +44,10 @@ export default function DecisionFeed({ runId, isLive }) {
     });
   };
 
-  const fixedBadge = (fixed) => {
-    if (fixed === true) return { label: "fixed", color: "#22c55e" };
-    if (fixed === false) return { label: "failed", color: "#ef4444" };
+  const fixedBadge = (decision) => {
+    if (decision.status === "detected") return { label: "detected", color: "#92400e" };
+    if (decision.fixed === true) return { label: "fixed", color: "#15803d" };
+    if (decision.fixed === false) return { label: "failed", color: "#b91c1c" };
     return { label: "uncertain", color: "#888" };
   };
 
@@ -59,9 +60,9 @@ export default function DecisionFeed({ runId, isLive }) {
 
   return (
     <div style={styles.container}>
-      <h2 style={styles.title}>agent decisions</h2>
+      <h2 style={styles.title}>{demoMode ? "detector findings" : "agent decisions"}</h2>
       {decisions.map((d) => {
-        const badge = fixedBadge(d.fixed);
+        const badge = fixedBadge(d);
         const isExpanded = expanded.has(d.id);
         const response = d.agent_response || "";
         const truncated = response.length > RESPONSE_PREVIEW_LENGTH && !isExpanded;
@@ -85,7 +86,9 @@ export default function DecisionFeed({ runId, isLive }) {
                 <span style={{ ...styles.fixedBadge, backgroundColor: badge.color }}>
                   {badge.label}
                 </span>
-                <span style={styles.timestamp}>{formatTime(d.timestamp)}</span>
+                <span style={styles.timestamp}>
+                  {d.timestamp == null ? "bundled fixture" : formatTime(d.timestamp)}
+                </span>
               </div>
             </div>
 
@@ -167,7 +170,7 @@ const styles = {
   },
   timestamp: {
     fontSize: "11px",
-    color: "#555",
+    color: "#9a9a9a",
   },
   toolsRow: {
     display: "flex",
@@ -179,7 +182,7 @@ const styles = {
     padding: "2px 8px",
     borderRadius: "4px",
     backgroundColor: "#0f1f3d",
-    color: "#3b82f6",
+    color: "#60a5fa",
     fontSize: "11px",
     fontFamily: "monospace",
   },
