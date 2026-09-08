@@ -47,3 +47,30 @@ jobs:
       - name: deploy
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+      - name: verify anonymous demo
+        env:
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error --location "$SITE_URL" --output /tmp/argus-index.html && \
+               curl --fail --silent --show-error --location "${SITE_URL%/}/demo-data.json" --output /tmp/argus-demo-data.json; then
+              break
+            fi
+            test "$attempt" -lt 12
+            sleep 5
+          done
+          grep -q '/Argus/assets/' /tmp/argus-index.html
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('/tmp/argus-demo-data.json').read_text())
+          run_id = payload['runs'][0]['id']
+          assert len(payload['metrics'][run_id]) == 21
+          anomaly_types = {
+              anomaly['type']
+              for decision in payload['decisions'][run_id]
+              for anomaly in decision['anomaly_types']
+          }
+          assert anomaly_types == {'grad_explosion', 'loss_spike'}
+          PY
