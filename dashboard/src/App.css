@@ -1,1 +1,77 @@
-/* intentionally empty */
+.app-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: 20px;
+}
+
+.demo-notice {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.75fr) minmax(280px, 1.5fr) auto;
+  gap: 20px;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 16px 18px;
+  border: 1px solid #513b17;
+  border-left: 4px solid #f59e0b;
+  border-radius: 6px;
+  background: #17130b;
+}
+
+.demo-notice div {
+  display: grid;
+  gap: 4px;
+}
+
+.demo-notice strong {
+  color: #fbbf24;
+  font-size: 14px;
+}
+
+.demo-notice span,
+.demo-notice p,
+.demo-notice a {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.demo-notice span,
+.demo-notice p {
+  color: #aaa28f;
+}
+
+.demo-notice p {
+  margin: 0;
+}
+
+.demo-notice a {
+  color: #fbbf24;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+
+.demo-notice a:focus-visible {
+  outline: 2px solid #fbbf24;
+  outline-offset: 4px;
+}
+
+@media (max-width: 900px) {
+  .app-header {
+    align-items: flex-start !important;
+    flex-direction: column;
+  }
+
+  .app-body,
+  .demo-notice {
+    grid-template-columns: 1fr;
+  }
+
+  .demo-notice {
+    gap: 10px;
+  }
+}
+
+@media (max-width: 560px) {
+  .app-shell {
+    padding: 16px !important;
+  }
+}
