@@ -37,6 +37,21 @@ Uses statistical process control instead of fixed thresholds. All four modes sha
 
 The injection harness (`inject_anomaly.py`) can simulate any mode on demand (loss 8–15×, grad\_norm 50–200).
 
+## Checkpointed recovery graph
+
+Argus also exposes a deterministic LangGraph recovery workflow in
+`agent/langgraph_recovery.py`. Its typed state graph makes the ReAct loop explicit:
+the model chooses one bounded tool call, the executor records the result, and the
+router either asks for the next action, retries a transient tool error within a
+budget, or stops. `MemorySaver` checkpoints the state after each node, so a paused
+attempt can resume with the same thread ID without losing its action history. The
+workflow is tested with a fake model and fixture tool, without an API key or
+training provider.
+
+```bash
+uv run --with-requirements agent/requirements.txt --with pytest pytest -q tests/test_langgraph_recovery.py
+```
+
 ---
 
 ## Stack
