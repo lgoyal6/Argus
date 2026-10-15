@@ -17,6 +17,10 @@ class RecoveryState(TypedDict, total=False):
     """State persisted after every graph node."""
 
     anomaly: dict[str, Any]
+    # LangGraph checkpoints only declared channels, including caller policy context.
+    resources: dict[str, Any]
+    recovery_policy: str
+    action_contract: dict[str, Any]
     action: dict[str, Any]
     thought: str
     tool_result: dict[str, Any]
@@ -37,6 +41,7 @@ class RecoveryModel(Protocol):
 
 
 ToolRunner = Callable[[str, dict[str, Any]], dict[str, Any]]
+ActionGate = Callable[[RecoveryState, dict[str, Any]], bool]
 
 
 def build_recovery_graph(
@@ -44,6 +49,7 @@ def build_recovery_graph(
     tool_runner: ToolRunner,
     *,
     checkpointer: Any | None = None,
+    action_gate: ActionGate | None = None,
 ):
     """Build the LangGraph ReAct loop.
 
@@ -79,6 +85,9 @@ def build_recovery_graph(
         action = state.get("action", {})
         kind = action.get("kind", "")
         history = list(state.get("history", []))
+        if action_gate is not None and not action_gate(state, dict(action)):
+            history.append({"action": action, "result": {"status": "refused", "reason": "deterministic action gate"}})
+            return {"history": history, "status": "failed", "error": "deterministic action gate refused action"}
         if kind == "finish":
             history.append({"action": action, "result": {"status": "finished"}})
             return {"history": history, "status": "completed"}
@@ -109,6 +118,11 @@ def build_recovery_graph(
             return "pause"
         return "execute"
 
+    def route_after_prepare(state: RecoveryState) -> str:
+        if state.get("status") in {"completed", "failed"}:
+            return END
+        return "think"
+
     def pause(state: RecoveryState) -> dict[str, Any]:
         return {"status": "paused"}
 
@@ -127,7 +141,7 @@ def build_recovery_graph(
     graph.add_node("execute", execute)
     graph.add_node("pause", pause)
     graph.add_edge(START, "prepare")
-    graph.add_edge("prepare", "think")
+    graph.add_conditional_edges("prepare", route_after_prepare, {"think": "think", END: END})
     graph.add_conditional_edges("think", route_after_think, {"execute": "execute", "pause": "pause", END: END})
     graph.add_conditional_edges("execute", route_after_execute, {"think": "think", "pause": "pause", END: END})
     graph.add_edge("pause", END)
