@@ -606,14 +606,13 @@ def check_finite(obj, *, _seen=None, _path="model", _budget=None) -> int:
 # --------------------------------------------------------------------------- #
 def resolve_artifact_dir(client, registered_model: str, version: str) -> str:
     """Resolve one registry version to a local directory without loading it."""
-    import mlflow
-
     mv = client.get_model_version(registered_model, version)
     artifact_dir = str(mv.source)
     if artifact_dir.startswith("file://"):
         artifact_dir = artifact_dir[len("file://"):]
     if not os.path.isdir(artifact_dir):
         try:
+            import mlflow
             artifact_dir = mlflow.artifacts.download_artifacts(str(mv.source))
         except Exception as exc:
             raise ArtifactRejected(

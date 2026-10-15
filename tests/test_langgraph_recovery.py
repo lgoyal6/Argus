@@ -50,6 +50,26 @@ def test_checkpoint_pause_and_resume_preserves_history():
     assert resumed["status"] == "completed"
     assert len(resumed["history"]) == 2
     assert model.calls == 2
+    terminal = graph.invoke({"resume": True, "budget": 2}, config=config)
+    assert terminal["status"] == "completed"
+    assert model.calls == 2
+
+
+def test_failed_terminal_checkpoint_does_not_call_model_again():
+    class BrokenModel:
+        calls = 0
+
+        def next_action(self, state):
+            self.calls += 1
+            raise RuntimeError("fixture model failure")
+
+    model = BrokenModel()
+    graph = build_recovery_graph(model, lambda name, payload: {"status": "ok"})
+    config = {"configurable": {"thread_id": "failed-terminal-reuse"}}
+    failed = graph.invoke({"anomaly": {"type": "loss_spike"}}, config=config)
+    reused = graph.invoke({"resume": True}, config=config)
+    assert failed["status"] == reused["status"] == "failed"
+    assert model.calls == 1
 
 
 def test_tool_error_is_retried_and_then_completes():
@@ -68,3 +88,19 @@ def test_tool_error_is_retried_and_then_completes():
     assert state["status"] == "completed"
     assert calls == 2
     assert state["retries"] == 1
+
+
+def test_action_gate_refuses_model_action_before_tool_effect():
+    effects = []
+    graph = build_recovery_graph(
+        FakeModel(),
+        lambda name, payload: effects.append((name, payload)) or {"status": "ok"},
+        action_gate=lambda state, action: False,
+    )
+    state = graph.invoke(
+        {"anomaly": {"type": "loss_spike"}, "budget": 2},
+        config={"configurable": {"thread_id": "gate-refusal"}},
+    )
+    assert state["status"] == "failed"
+    assert "action gate" in state["error"]
+    assert effects == []
