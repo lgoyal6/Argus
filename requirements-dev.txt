@@ -22,3 +22,6 @@ opentelemetry-sdk>=1.44,<2
 # experiments/artifact_guard.py itself imports numpy lazily, inside the two checks
 # that read weights, so the module stays importable without it.
 numpy>=1.26
+
+# The checkpointed recovery tests execute the real graph without a model provider.
+langgraph==0.6.11
