@@ -110,8 +110,10 @@ def main():
         "protocol_id": protocol["protocol_id"],
         "protocol_sha256": hashlib.sha256(raw_protocol).hexdigest(),
         "model_tag": args.model,
-        "model_manifest_digest": "sha256-dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff",
-        "ollama_cloud_disabled_by_runner": True,
+        "model_manifest_digest": None,
+        "model_provenance": "unverified: this client does not inspect the selected model manifest",
+        "ollama_cloud_disabled_by_runner": None,
+        "server_configuration": "unverified: loopback client does not own or inspect the server environment",
         "local_endpoint": "http://127.0.0.1:11434",
         "cases": results,
         "summary": {
