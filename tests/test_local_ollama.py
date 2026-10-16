@@ -149,3 +149,51 @@ def test_loopback_endpoint_cannot_redirect_off_host(monkeypatch):
         server.shutdown()
         server.server_close()
         worker.join(timeout=2)
+
+
+CONTRACT = {"read_metrics": {"required": {"metrics_file": "string", "last_n": "integer"}},
+            "finish": {"required": {}}}
+
+
+@pytest.mark.parametrize("action", [
+    {"kind": "read_metrics", "input": {"metrics_file": "/synthetic/metrics.jsonl", "last_n": "5"}},
+    {"kind": "read_metrics", "input": {"metrics_file": "/synthetic/metrics.jsonl", "last_n": True}},
+    {"kind": "read_metrics", "input": {"metrics_file": "/synthetic/metrics.jsonl", "last_n": 1.5}},
+    {"kind": "read_metrics", "input": {"last_n": 5}},
+    {"kind": "read_metrics", "input": {"metrics_file": "/synthetic/metrics.jsonl", "last_n": 5, "extra": 1}},
+    {"kind": "rerun_training", "input": {}},
+])
+def test_declared_action_contract_rejects_wrong_argument_types_fields_or_actions(action):
+    model = OllamaRecoveryModel(opener=fake_opener_for({"thought": "inspect", "action": action}, []))
+    with pytest.raises(LocalModelError, match="contract"):
+        model.next_action({"action_contract": CONTRACT})
+
+
+def test_declared_contract_constrains_structured_generation_and_accepts_typed_arguments():
+    seen = []
+    action = {"kind": "read_metrics", "input": {"metrics_file": "/synthetic/metrics.jsonl", "last_n": 5}}
+    model = OllamaRecoveryModel(opener=fake_opener_for({"thought": "inspect", "action": action}, seen))
+    assert model.next_action({"action_contract": CONTRACT})["action"] == action
+    payload = seen[0][2]
+    assert json.loads(payload["prompt"])["allowed_actions"] == ["finish", "read_metrics"]
+    variants = payload["format"]["properties"]["action"]["anyOf"]
+    metrics = next(v for v in variants if v["properties"]["kind"]["enum"] == ["read_metrics"])
+    inputs = metrics["properties"]["input"]
+    assert inputs["properties"]["last_n"] == {"type": "integer"}
+    assert inputs["additionalProperties"] is False
+    assert set(inputs["required"]) == {"metrics_file", "last_n"}
+
+
+@pytest.mark.parametrize("contract", [
+    {"read_metrics": {"required": {"last_n": "timestamp"}}},
+    {"read_metrics": {"required": {"last_n": 1}}},
+    {"finish": {"required": {}}, 1: {"required": {}}},
+    ["finish"],
+])
+def test_malformed_contract_is_rejected_before_any_model_call(contract):
+    seen = []
+    model = OllamaRecoveryModel(opener=fake_opener_for(
+        {"thought": "finish", "action": {"kind": "finish", "input": {}}}, seen))
+    with pytest.raises(LocalModelError, match="contract"):
+        model.next_action({"action_contract": contract})
+    assert seen == []

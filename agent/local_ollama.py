@@ -7,6 +7,7 @@ Reject redirects and proxies; validated model actions still pass the graph gate.
 from __future__ import annotations
 
 import json
+import math
 from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -40,6 +41,42 @@ _ACTION_SCHEMA = {
     },
 }
 
+_INPUT_TYPES = {"string": (str,), "integer": (int,), "number": (int, float),
+                "boolean": (bool,), "object": (dict,), "array": (list,),
+                "null": (type(None),)}
+
+
+def _schema_for_contract(contract):
+    """Use the caller's declared argument types for generation and decoding."""
+    if contract is None or contract == {}:
+        return _ACTION_SCHEMA, {}
+    if not isinstance(contract, dict) or any(not isinstance(key, str) for key in contract):
+        raise LocalModelError("action contract must be an object")
+    inputs, variants = {}, []
+    for kind, entry in sorted(contract.items()):
+        if kind not in _ACTIONS or not isinstance(entry, dict) or set(entry) != {"required"}:
+            raise LocalModelError("action contract contains an unsupported declaration")
+        fields = entry["required"]
+        if not isinstance(fields, dict) or any(
+            not isinstance(key, str) or not key or not isinstance(value, str) or value not in _INPUT_TYPES
+            for key, value in fields.items()
+        ):
+            raise LocalModelError("action contract requires named fields with JSON types")
+        inputs[kind] = dict(fields)
+        variants.append({
+            "type": "object", "additionalProperties": False, "required": ["kind", "input"],
+            "properties": {
+                "kind": {"type": "string", "enum": [kind]},
+                "input": {"type": "object", "additionalProperties": False,
+                          "required": sorted(fields),
+                          "properties": {key: {"type": value} for key, value in sorted(fields.items())}},
+            },
+        })
+    return {**_ACTION_SCHEMA, "properties": {
+        "thought": _ACTION_SCHEMA["properties"]["thought"],
+        "action": {"anyOf": variants},
+    }}, inputs
+
 
 class OllamaRecoveryModel:
     """A bounded JSON-action client restricted to an HTTP loopback endpoint."""
@@ -70,6 +107,7 @@ class OllamaRecoveryModel:
 
     def next_action(self, state):
         """Return one schema-checked action; tool safety remains with the graph gate."""
+        schema, inputs = _schema_for_contract(state.get("action_contract"))
         payload = {
             "model": self.model,
             "system": (
@@ -86,10 +124,10 @@ class OllamaRecoveryModel:
                 "last_tool_result": state.get("tool_result"),
                 "history": state.get("history", []),
                 "round": state.get("round", 0),
-                "allowed_actions": sorted(_ACTIONS),
-                "action_schema": _ACTION_SCHEMA,
+                "allowed_actions": sorted(inputs or _ACTIONS),
+                "action_schema": schema,
             }, ensure_ascii=False, separators=(",", ":")),
-            "format": _ACTION_SCHEMA,
+            "format": schema,
             "stream": False,
             "options": {"temperature": 0, "num_predict": self.max_tokens},
         }
@@ -138,4 +176,14 @@ class OllamaRecoveryModel:
             raise LocalModelError("action kind or input is invalid")
         if action["kind"] == "finish" and action["input"]:
             raise LocalModelError("finish action input must be empty")
+        if inputs:
+            fields = inputs.get(action["kind"])
+            if fields is None or set(action["input"]) != set(fields):
+                raise LocalModelError("action does not match declared contract fields")
+            for key, typename in fields.items():
+                value = action["input"][key]
+                if type(value) not in _INPUT_TYPES[typename] or (
+                    typename == "number" and not math.isfinite(value)
+                ):
+                    raise LocalModelError("action argument does not match declared contract type")
         return result
