@@ -1,12 +1,32 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import RunSelector from "./components/RunSelector";
 import MetricsChart from "./components/MetricsChart";
 import DecisionFeed from "./components/DecisionFeed";
-import { isDemoMode } from "./api";
+import RecoveryReplay from "./components/RecoveryReplay";
+import { getRecoveryReplay, isDemoMode } from "./api";
 import "./App.css";
 
 export default function App() {
   const [selectedRun, setSelectedRun] = useState(null);
+  const [recoveryReplay, setRecoveryReplay] = useState(null);
+  const [recoveryError, setRecoveryError] = useState(false);
+
+  useEffect(() => {
+    if (!isDemoMode) return undefined;
+
+    let active = true;
+    getRecoveryReplay()
+      .then(({ data }) => {
+        if (active) setRecoveryReplay(data);
+      })
+      .catch(() => {
+        if (active) setRecoveryError(true);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const isLive = selectedRun?.status === "running";
 
@@ -43,6 +63,14 @@ export default function App() {
             Inspect the source fixture
           </a>
         </aside>
+      )}
+
+      {isDemoMode && recoveryError ? (
+        <p className="recovery-error" role="status">
+          The checkpoint replay is unavailable. The detector demo is still available.
+        </p>
+      ) : (
+        isDemoMode && <RecoveryReplay replay={recoveryReplay} />
       )}
 
       {/* main content */}
