@@ -111,6 +111,8 @@ class OllamaRecoveryModel:
             generated = envelope["response"]
         except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
             raise LocalModelError("Ollama returned invalid JSON") from exc
+        if envelope.get("done") is not True or envelope.get("done_reason") != "stop":
+            raise LocalModelError("Ollama generation did not complete with a stop reason")
         if not isinstance(generated, str) or len(generated) > 100_000:
             raise LocalModelError("Ollama generated response is invalid or too large")
         self.last_raw_response = generated
