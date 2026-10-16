@@ -24,10 +24,11 @@ class Response:
         return self.body[:limit]
 
 
-def fake_opener_for(inner, seen):
+def fake_opener_for(inner, seen, *, done=True, done_reason="stop"):
     def opener(request, timeout):
         seen.append((request, timeout, json.loads(request.data)))
-        return Response(json.dumps({"response": json.dumps(inner), "done": True,
+        return Response(json.dumps({"response": json.dumps(inner), "done": done,
+                                    "done_reason": done_reason,
                                     "prompt_eval_count": 10}).encode())
     return opener
 
@@ -82,6 +83,15 @@ def test_local_adapter_rejects_invalid_limits_and_non_json_response():
         OllamaRecoveryModel(max_tokens=257)
     model = OllamaRecoveryModel(opener=lambda *args, **kwargs: Response(b"not-json"))
     with pytest.raises(LocalModelError):
+        model.next_action({})
+
+
+@pytest.mark.parametrize("done,done_reason", [(False, "stop"), (True, "length"), (True, None)])
+def test_local_adapter_rejects_incomplete_or_token_limited_generation(done, done_reason):
+    model = OllamaRecoveryModel(opener=fake_opener_for(
+        {"thought": "finish", "action": {"kind": "finish", "input": {}}}, [],
+        done=done, done_reason=done_reason))
+    with pytest.raises(LocalModelError, match="generation did not complete"):
         model.next_action({})
 
 
