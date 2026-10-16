@@ -72,6 +72,105 @@
   font-size: 13px;
 }
 
+.detector-playground {
+  margin-bottom: 20px;
+  padding: 18px;
+  border: 1px solid #29344a;
+  border-radius: 6px;
+  background: #0e1118;
+}
+
+.detector-copy h2 {
+  margin: 0 0 5px;
+  font-size: 15px;
+}
+
+.detector-copy p:not(.detector-eyebrow),
+.detector-limit,
+.detector-form-row span {
+  color: #9da6b5;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.detector-copy p:not(.detector-eyebrow) {
+  margin: 0 0 14px;
+}
+
+.detector-eyebrow {
+  margin: 0 0 6px;
+  color: #91b9f2;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+}
+
+.detector-playground form {
+  display: grid;
+  gap: 8px;
+}
+
+.detector-playground label {
+  color: #dce4f2;
+  font-size: 12px;
+}
+
+.detector-playground textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #343d50;
+  border-radius: 4px;
+  background: #090b10;
+  color: #e4e9f2;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 10px;
+}
+
+.detector-playground textarea:focus-visible,
+.detector-playground button:focus-visible {
+  outline: 2px solid #91b9f2;
+  outline-offset: 2px;
+}
+
+.detector-form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detector-playground button {
+  border: 1px solid #4a6390;
+  border-radius: 4px;
+  background: #1c2a41;
+  color: #e6efff;
+  font: inherit;
+  font-size: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.detector-result {
+  display: block;
+  margin-top: 12px;
+  border-left: 3px solid #60a5fa;
+  background: #101b2b;
+  color: #cfe0ff;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.detector-result.is-error {
+  border-left-color: #f59e0b;
+  background: #17130b;
+  color: #fbbf24;
+}
+
+.detector-limit {
+  margin: 12px 0 0;
+}
+
 .recovery-heading {
   display: flex;
   align-items: flex-start;
@@ -147,4 +246,10 @@
   .app-shell {
     padding: 16px !important;
   }
+}
+
+@media (max-width: 560px) {
+  .run-selector { flex-wrap: wrap; max-width: 100%; }
+  .run-selector select { max-width: 100%; min-width: 0; }
+  .detector-form-row { flex-wrap: wrap; }
 }

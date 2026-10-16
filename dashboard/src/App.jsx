@@ -3,6 +3,7 @@ import RunSelector from "./components/RunSelector";
 import MetricsChart from "./components/MetricsChart";
 import DecisionFeed from "./components/DecisionFeed";
 import RecoveryReplay from "./components/RecoveryReplay";
+import DetectorPlayground from "./components/DetectorPlayground";
 import { getRecoveryReplay, isDemoMode } from "./api";
 import "./App.css";
 
@@ -52,8 +53,8 @@ export default function App() {
             <span>21 training samples, 2 detector findings, read-only</span>
           </div>
           <p>
-            This page replays the repository fixture through Argus&apos;s real detector.
-            No model API, backend, Supabase, or repair action runs here.
+            Charts replay saved fixture results. The playground below runs the source Python detector
+            on your entered history. No model, training or repair action runs here.
           </p>
           <a
             href="https://github.com/lgoyal6/Argus/blob/main/examples/sample_metrics.jsonl"
@@ -72,6 +73,8 @@ export default function App() {
       ) : (
         isDemoMode && <RecoveryReplay replay={recoveryReplay} />
       )}
+
+      {isDemoMode && <DetectorPlayground />}
 
       {/* main content */}
       <div className="app-body" style={styles.body}>
