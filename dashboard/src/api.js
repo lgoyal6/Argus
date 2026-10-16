@@ -27,6 +27,13 @@ const demoResponse = async (select) => ({ data: select(await getDemoData()) });
 // ── runs ───────────────────────────────────────────────────────────────────────
 export const getRuns = () =>
   isDemoMode ? demoResponse((fixture) => fixture.runs) : api.get("/runs/");
+export const getRecoveryReplay = () =>
+  isDemoMode
+    ? fetch(`${import.meta.env.BASE_URL}recovery-replay.json`).then((response) => {
+        if (!response.ok) throw new Error("could not load bundled recovery replay");
+        return response.json().then((data) => ({ data }));
+      })
+    : Promise.resolve({ data: null });
 export const getRun = (runId) =>
   isDemoMode
     ? demoResponse((fixture) => fixture.runs.find((run) => run.id === runId))

@@ -1,0 +1,35 @@
+{
+  "thread_id": "public-recovery-replay",
+  "source": "agent/langgraph_recovery.py",
+  "source_sha256": "65bd9f72a62828c713343eda3d24a835cb58ddc0a7ca59bbfe405931084cf27e",
+  "first_status": "paused",
+  "resumed_status": "completed",
+  "actions": [
+    "read_metrics",
+    "finish"
+  ],
+  "history": [
+    {
+      "action": {
+        "kind": "read_metrics",
+        "input": {
+          "last_n": 2
+        }
+      },
+      "result": {
+        "status": "ok",
+        "rows": 2
+      }
+    },
+    {
+      "action": {
+        "kind": "finish",
+        "input": {}
+      },
+      "result": {
+        "status": "finished"
+      }
+    }
+  ],
+  "scope": "Real LangGraph execution with a deterministic fake model and fixture tool; no provider or live training action."
+}

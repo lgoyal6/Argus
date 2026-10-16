@@ -34,7 +34,7 @@ const payload = {
     source: "examples/sample_metrics.jsonl",
     rows: detectorReport.rows,
     scope:
-      "Read-only detector replay. No model API, backend, Supabase, or repair action runs in this public demo.",
+      "Read-only detector replay plus a saved checkpoint/resume trace from the real LangGraph workflow. No model API, backend, Supabase, or live repair action runs here.",
   },
   runs: [
     {
