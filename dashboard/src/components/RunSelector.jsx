@@ -53,14 +53,14 @@ export default function RunSelector({ selectedRun, onSelect }) {
     return "#888";
   };
 
-  if (loading) return <div style={styles.container}>loading runs...</div>;
-  if (error) return <div style={styles.container}>{error}</div>;
-  if (runs.length === 0) return <div style={styles.container}>no runs yet</div>;
+  if (loading) return <div className="run-selector" style={styles.container}>loading runs...</div>;
+  if (error) return <div className="run-selector" style={styles.container}>{error}</div>;
+  if (runs.length === 0) return <div className="run-selector" style={styles.container}>no runs yet</div>;
 
   const isRunning = selectedRun?.status === "running";
 
   return (
-    <div style={styles.container}>
+    <div className="run-selector" style={styles.container}>
       <label htmlFor="training-run" style={styles.label}>training run</label>
       <select
         id="training-run"
