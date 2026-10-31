@@ -39,6 +39,7 @@ export default function App() {
         <div style={styles.headerLeft}>
           <span style={styles.logo}>Argus</span>
           <span style={styles.tagline}>autonomous ml training debugger</span>
+          <a href="https://github.com/lgoyal6/Argus" target="_blank" rel="noopener noreferrer">GitHub</a>
         </div>
         <RunSelector
           selectedRun={selectedRun}
