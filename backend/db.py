@@ -6,6 +6,7 @@ import uuid
 import time
 from pathlib import Path
 from supabase import create_client, Client
+import limits
 
 # ── client ─────────────────────────────────────────────────────────────────────
 def get_client() -> Client:
@@ -33,9 +34,19 @@ def create_run(name, config_path, metrics_file, training_dir):
     return run
 
 
-def get_runs():
+def get_runs(limit=None, offset=0):
+    """The run index grows without bound as runs accumulate; page it."""
     client = get_client()
-    response = client.table("runs").select("*").order("created_at", desc=True).execute()
+    if limit is None:
+        limit = min(limits.MAX_WORK_UNITS or 200, 200)
+    limits.check_work(limit, "rows")
+    response = (
+        client.table("runs")
+        .select("*")
+        .order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
     return response.data
 
 
@@ -55,13 +66,44 @@ def update_run_status(run_id, status):
 
 # ── metrics ────────────────────────────────────────────────────────────────────
 def insert_metrics(run_id, metrics_file):
+    """Ingest a metrics file under two bounds: bytes read and rows upserted.
+
+    The file is named by whoever created the run, so both its size and its line
+    count are caller-influenced. `readlines()` on the whole file was the unbounded
+    part: a long-running job writes one line per step forever, and the sync
+    endpoint would read all of it into memory and upsert all of it in one call.
+
+    Bytes are bounded first, while reading, so an oversized file costs one read of
+    the cap and not one read of the file. Rows are bounded second. Both refuse
+    instead of truncating, because a partially ingested run that reports success is
+    a silent data bug and a 413 that names the limit is not.
+    """
     client = get_client()
     path = Path(metrics_file)
     if not path.exists():
         return {"error": "metrics file not found"}
 
+    if limits.MAX_INGEST_BYTES:
+        size = path.stat().st_size
+        if size > limits.MAX_INGEST_BYTES:
+            raise limits.WorkLimitExceeded(size, limits.MAX_INGEST_BYTES, "bytes")
+
+    lines = []
+    read = 0
     with open(path, "r") as f:
-        lines = [l.strip() for l in f.readlines() if l.strip()]
+        for line in f:
+            read += len(line)
+            if limits.MAX_INGEST_BYTES and read > limits.MAX_INGEST_BYTES:
+                raise limits.WorkLimitExceeded(
+                    read, limits.MAX_INGEST_BYTES, "bytes"
+                )
+            stripped = line.strip()
+            if stripped:
+                lines.append(stripped)
+                if limits.MAX_WORK_UNITS and len(lines) > limits.MAX_WORK_UNITS:
+                    raise limits.WorkLimitExceeded(
+                        len(lines), limits.MAX_WORK_UNITS, "rows"
+                    )
 
     rows = []
     for line in lines:
@@ -75,10 +117,38 @@ def insert_metrics(run_id, metrics_file):
     return {"inserted": len(rows)}
 
 
-def get_metrics(run_id):
+def get_metrics(run_id, limit=None, offset=0):
+    """Read a metrics series, bounded by rows.
+
+    The dashboard charts a whole run and passes no limit, so a default page size
+    would silently truncate every chart. Instead the server counts the series
+    first, which is one cheap COUNT rather than a full fetch, and refuses above
+    MAX_WORK_UNITS with a 413 that names `limit` and `offset`. A caller that wants
+    a longer run pages through it; a caller that asks for a million rows in one
+    request is told no rather than served.
+    """
     client = get_client()
-    response = client.table("metrics").select("*").eq("run_id", run_id).order("step").execute()
-    return response.data
+    if limit is None:
+        counted = (
+            client.table("metrics")
+            .select("step", count="exact")
+            .eq("run_id", run_id)
+            .limit(1)
+            .execute()
+        )
+        total = counted.count or 0
+        limits.check_work(total, "rows")
+        query = client.table("metrics").select("*").eq("run_id", run_id).order("step")
+    else:
+        limits.check_work(limit, "rows")
+        query = (
+            client.table("metrics")
+            .select("*")
+            .eq("run_id", run_id)
+            .order("step")
+            .range(offset, offset + limit - 1)
+        )
+    return query.execute().data
 
 
 # ── decisions ──────────────────────────────────────────────────────────────────
@@ -97,7 +167,18 @@ def insert_decision(run_id, decision_payload):
     return row
 
 
-def get_decisions(run_id):
+def get_decisions(run_id, limit=None, offset=0):
+    """One decision row per agent intervention; bounded the same way as metrics."""
     client = get_client()
-    response = client.table("decisions").select("*").eq("run_id", run_id).order("timestamp", desc=True).execute()
+    if limit is None:
+        limit = min(limits.MAX_WORK_UNITS or 500, 500)
+    limits.check_work(limit, "rows")
+    response = (
+        client.table("decisions")
+        .select("*")
+        .eq("run_id", run_id)
+        .order("timestamp", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
     return response.data

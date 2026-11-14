@@ -1,15 +1,21 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from schemas import RunCreate, Run
 import db
+import limits
 
 router = APIRouter()
 
 
 # ── get all runs ───────────────────────────────────────────────────────────────
 @router.get("/", response_model=list[Run])
-def get_runs():
+def get_runs(
+    limit: int | None = Query(None, ge=1, description="runs to return, newest first"),
+    offset: int = Query(0, ge=0),
+):
     try:
-        return db.get_runs()
+        return db.get_runs(limit=limit, offset=offset)
+    except limits.WorkLimitExceeded:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
