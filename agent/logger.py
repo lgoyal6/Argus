@@ -4,6 +4,9 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Flat in both layouts; see the note in agent/detector.py.
+import obs
+
 load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
 
 # ── supabase ───────────────────────────────────────────────────────────────────
@@ -27,15 +30,19 @@ def set_run_id(run_id):
     _run_id = run_id
 
 
-def log_decision(anomalies, agent_response, tools_used, status="failed"):
-    # status: "fixed" | "patched" | "failed"
+def log_decision(anomalies, agent_response, tools_used, status="failed", attempt=None):
+    # status: "fixed" | "patched" | "failed", derived by agent/attempt.py from what
+    # was observed in the metrics stream. `attempt` carries the evidence behind it -
+    # the trigger, the approved action, the resulting config and the observations - so
+    # a stored row can be re-audited rather than taken on trust.
     payload = {
         "timestamp": time.time(),
         "anomalies": anomalies,
         "tools_used": tools_used,
         "agent_response": agent_response,
         "status": status,
-        "fixed": status == "fixed"
+        "fixed": status == "fixed",
+        "attempt": attempt
     }
 
     _write_local(payload)
@@ -70,12 +77,19 @@ def _write_supabase(payload):
             "tools_used": payload["tools_used"],
             "agent_response": payload["agent_response"],
             "fixed": payload["fixed"],
-            "status": payload["status"]
+            "status": payload["status"],
+            "attempt": payload["attempt"]
         }
         client.table("decisions").insert(row).execute()
         print("logged decision to Supabase")
     except Exception as e:
-        print(f"supabase write failed: {e}")
+        # `print(f"...{e}")` put unreviewed exception text on stdout. The supabase
+        # client holds the key in postgrest.session.headers under both `apikey` and
+        # `authorization`, so anything that renders a request or session object writes
+        # the credential to the container log, where it is retained for as long as the
+        # log is. obs.log runs the same scrubber over every field.
+        obs.log("logger.supabase_write_failed", level="error",
+                error_type=type(e).__name__, detail=str(e))
 
 
 def print_decision(payload):

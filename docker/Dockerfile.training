@@ -3,8 +3,14 @@ FROM python:3.11-slim
 WORKDIR /app
 RUN pip install pyyaml
 RUN pip install "numpy<2"
-RUN pip install torch==2.1.0 --index-url https://download.pytorch.org/whl/cpu
-RUN pip install torchvision==0.16.0 --index-url https://download.pytorch.org/whl/cpu
+# torch 2.1.0 / torchvision 0.16.0 segfault inside this image on aarch64: the crash is
+# in Conv2d._conv_forward on the first forward pass, so `docker compose up` on any
+# Apple silicon Mac starts training, dies with "Segmentation fault", and takes the
+# container - and with it the /rerun endpoint on 8001 - down with exit 139. Those
+# releases predate usable arm64 Linux wheels. 2.14.0 runs the same train.py to
+# completion on both arches.
+RUN pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
+RUN pip install torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cpu
 RUN pip install fastapi uvicorn
 COPY training_job/ .
 CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port 8001 & python3 train.py"]

@@ -6,5 +6,10 @@ COPY backend/requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY backend/ .
+# Both images run a FLAT module layout, so obs.py lands beside main.py and is imported
+# as `import obs`, not `from backend import obs`. Dropping this COPY crashes the
+# container at startup while the test suite, which runs from the repository root, stays
+# green.
+COPY obs.py .
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

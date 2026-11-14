@@ -1,4 +1,5 @@
 import logger
+import obs
 
 # set this to your actual run ID from Supabase
 RUN_ID = "26a75d76-72f9-4afe-abc3-fd1474284d0f"  # e.g. "your-uuid-here"
@@ -11,6 +12,7 @@ from detector import detect_anomalies
 from tools import TOOLS, run_tool
 from prompts import SYSTEM_PROMPT, build_user_prompt
 from logger import log_decision
+from attempt import Attempt, TIMED_OUT
 import anthropic
 from dotenv import load_dotenv
 load_dotenv("../.env")
@@ -27,6 +29,13 @@ COOLDOWN_STEPS = 500      # steps to wait before re-triggering the same anomaly 
 def run_agent(anomalies):
     client = anthropic.Anthropic()
 
+    # One attempt record per invocation, opened before anything is asked for. The
+    # trigger is recorded now so the claim at the end can be checked against what
+    # actually set it off, and the metrics watermark is captured before any action so
+    # "new rows" means new relative to the request rather than to the reply.
+    attempt = Attempt(run_id=RUN_ID, trigger=anomalies[0])
+    attempt.capture_baseline(METRICS_FILE)
+
     user_prompt = build_user_prompt(
         anomalies=anomalies,
         metrics_file=METRICS_FILE,
@@ -39,8 +48,6 @@ def run_agent(anomalies):
     print("\n── agent invoked ──────────────────────────────────────────")
     print(f"anomalies: {[a['type'] for a in anomalies]}")
 
-    patched = False
-    rerun_succeeded = False
     all_tools_used = []
 
     for round_num in range(MAX_TOOL_ROUNDS):
@@ -63,35 +70,47 @@ def run_agent(anomalies):
         if not tool_blocks or response.stop_reason == "end_turn":
             print("\n── agent finished ─────────────────────────────────────────")
             final_text = "\n".join(text_blocks)
-            if patched and rerun_succeeded:
-                status = "fixed"
-            elif patched:
-                status = "patched"
-            else:
-                status = "failed"
+            # The status comes from what was observed in the metrics stream, not from
+            # which tools returned without an error. observe() is what decides whether
+            # a trainer ran at all.
+            attempt.observe(METRICS_FILE)
+            print(f"attempt {attempt.attempt_id}: {attempt.outcome} ({attempt.terminal})")
             log_decision(
                 anomalies=anomalies,
                 agent_response=final_text,
-                tools_used=all_tools_used + ([b.name for b in tool_blocks] if tool_blocks else []),
-                status=status
+                # Only tools that were actually dispatched. Names lifted off an
+                # undispatched block would record work that never happened.
+                tools_used=all_tools_used,
+                status=attempt.status(),
+                attempt=attempt.to_dict()
             )
             return final_text
 
         # process tool calls
         tool_results = []
         for tool_call in tool_blocks:
+            # The tool input is model-chosen and the result of read_config is the whole
+            # config file. Printing either put configuration contents into the container
+            # log; obs.log keeps the tool name, which is the part anyone reads, and
+            # summarises the rest.
             print(f"\ncalling tool: {tool_call.name}")
-            print(f"input: {json.dumps(tool_call.input, indent=2)}")
+            obs.log("recovery.tool_call", tool=tool_call.name, payload=tool_call.input)
 
-            result = run_tool(tool_call.name, tool_call.input)
-            print(f"result: {json.dumps(result, indent=2)[:500]}")
+            result = run_tool(tool_call.name, tool_call.input,
+                              attempt_id=attempt.attempt_id)
+            obs.log("recovery.tool_result", tool=tool_call.name,
+                    refused=bool(isinstance(result, dict) and result.get("refused")),
+                    payload=result)
 
             all_tools_used.append(tool_call.name)
 
+            # The approved action is the patch the sandbox actually applied, which is
+            # not always the patch the model asked for.
             if tool_call.name == "patch_config" and result.get("status") == "patched":
-                patched = True
-            if tool_call.name == "rerun_training" and result.get("status") == "started":
-                rerun_succeeded = True
+                attempt.record_action(
+                    {"tool": "patch_config", "changes": result.get("changes")},
+                    resulting_config=run_tool("read_config", {"config_path": CONFIG_PATH})
+                )
 
             tool_results.append({
                 "type": "tool_result",
@@ -104,11 +123,16 @@ def run_agent(anomalies):
         messages.append({"role": "user", "content": tool_results})
 
     print("max tool rounds reached")
+    # Running out of rounds is a timeout, not a failure to act: the difference matters
+    # to whether retrying the same thing is sensible.
+    attempt.observe(METRICS_FILE)
+    attempt.fail(TIMED_OUT, reason="max tool rounds reached")
     log_decision(
         anomalies=anomalies,
         agent_response="Max tool rounds reached without resolution.",
         tools_used=all_tools_used,
-        status="patched" if patched else "failed"
+        status=attempt.status(),
+        attempt=attempt.to_dict()
     )
     return None
 
