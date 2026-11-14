@@ -1,20 +1,24 @@
 import logger
+import obs
 
 # set this to your actual run ID from Supabase
 RUN_ID = "26a75d76-72f9-4afe-abc3-fd1474284d0f"  # e.g. "your-uuid-here"
 
+import os
 import time
 import json
 import requests
 from pathlib import Path
-from detector import detect_anomalies
+from detector import detect_anomalies, newest_trace_context
 from tools import TOOLS, run_tool
 from prompts import SYSTEM_PROMPT, build_user_prompt
 from logger import log_decision
+from attempt import Attempt, TIMED_OUT
 import anthropic
 from dotenv import load_dotenv
 load_dotenv("../.env")
 # ── config ─────────────────────────────────────────────────────────────────────
+BACKEND_URL = os.environ.get("ARGUS_BACKEND_URL", "http://backend:8000")
 METRICS_FILE = "../training_job/metrics/metrics.jsonl"
 CONFIG_PATH = "../training_job/config.yaml"
 TRAINING_DIR = "../training_job"
@@ -26,6 +30,13 @@ COOLDOWN_STEPS = 500      # steps to wait before re-triggering the same anomaly 
 # ── agent call ─────────────────────────────────────────────────────────────────
 def run_agent(anomalies):
     client = anthropic.Anthropic()
+
+    # One attempt record per invocation, opened before anything is asked for. The
+    # trigger is recorded now so the claim at the end can be checked against what
+    # actually set it off, and the metrics watermark is captured before any action so
+    # "new rows" means new relative to the request rather than to the reply.
+    attempt = Attempt(run_id=RUN_ID, trigger=anomalies[0])
+    attempt.capture_baseline(METRICS_FILE)
 
     user_prompt = build_user_prompt(
         anomalies=anomalies,
@@ -39,8 +50,6 @@ def run_agent(anomalies):
     print("\n── agent invoked ──────────────────────────────────────────")
     print(f"anomalies: {[a['type'] for a in anomalies]}")
 
-    patched = False
-    rerun_succeeded = False
     all_tools_used = []
 
     for round_num in range(MAX_TOOL_ROUNDS):
@@ -63,35 +72,47 @@ def run_agent(anomalies):
         if not tool_blocks or response.stop_reason == "end_turn":
             print("\n── agent finished ─────────────────────────────────────────")
             final_text = "\n".join(text_blocks)
-            if patched and rerun_succeeded:
-                status = "fixed"
-            elif patched:
-                status = "patched"
-            else:
-                status = "failed"
+            # The status comes from what was observed in the metrics stream, not from
+            # which tools returned without an error. observe() is what decides whether
+            # a trainer ran at all.
+            attempt.observe(METRICS_FILE)
+            print(f"attempt {attempt.attempt_id}: {attempt.outcome} ({attempt.terminal})")
             log_decision(
                 anomalies=anomalies,
                 agent_response=final_text,
-                tools_used=all_tools_used + ([b.name for b in tool_blocks] if tool_blocks else []),
-                status=status
+                # Only tools that were actually dispatched. Names lifted off an
+                # undispatched block would record work that never happened.
+                tools_used=all_tools_used,
+                status=attempt.status(),
+                attempt=attempt.to_dict()
             )
             return final_text
 
         # process tool calls
         tool_results = []
         for tool_call in tool_blocks:
+            # The tool input is model-chosen and the result of read_config is the whole
+            # config file. Printing either put configuration contents into the container
+            # log; obs.log keeps the tool name, which is the part anyone reads, and
+            # summarises the rest.
             print(f"\ncalling tool: {tool_call.name}")
-            print(f"input: {json.dumps(tool_call.input, indent=2)}")
+            obs.log("recovery.tool_call", tool=tool_call.name, payload=tool_call.input)
 
-            result = run_tool(tool_call.name, tool_call.input)
-            print(f"result: {json.dumps(result, indent=2)[:500]}")
+            result = run_tool(tool_call.name, tool_call.input,
+                              attempt_id=attempt.attempt_id)
+            obs.log("recovery.tool_result", tool=tool_call.name,
+                    refused=bool(isinstance(result, dict) and result.get("refused")),
+                    payload=result)
 
             all_tools_used.append(tool_call.name)
 
+            # The approved action is the patch the sandbox actually applied, which is
+            # not always the patch the model asked for.
             if tool_call.name == "patch_config" and result.get("status") == "patched":
-                patched = True
-            if tool_call.name == "rerun_training" and result.get("status") == "started":
-                rerun_succeeded = True
+                attempt.record_action(
+                    {"tool": "patch_config", "changes": result.get("changes")},
+                    resulting_config=run_tool("read_config", {"config_path": CONFIG_PATH})
+                )
 
             tool_results.append({
                 "type": "tool_result",
@@ -104,18 +125,77 @@ def run_agent(anomalies):
         messages.append({"role": "user", "content": tool_results})
 
     print("max tool rounds reached")
+    # Running out of rounds is a timeout, not a failure to act: the difference matters
+    # to whether retrying the same thing is sensible.
+    attempt.observe(METRICS_FILE)
+    attempt.fail(TIMED_OUT, reason="max tool rounds reached")
     log_decision(
         anomalies=anomalies,
         agent_response="Max tool rounds reached without resolution.",
         tools_used=all_tools_used,
-        status="patched" if patched else "failed"
+        status=attempt.status(),
+        attempt=attempt.to_dict()
     )
     return None
+
+
+def poll_once(last_handled, act=None):
+    """One cycle: ingest what is new, look at it, and act if it is wrong.
+
+    One span per poll, parented on the newest row the trainer wrote. That row is what
+    this poll exists to act on and it arrived from another process, so it is the only
+    available parent - and taking it here means the ingest call, the detection and
+    any recovery below are one trace rather than three unrelated ones that no query
+    joins.
+
+    `act` defaults to the real agent invocation. It is a parameter because that
+    invocation is a paid model call, which makes the whole cycle undrivable without
+    one; nothing else about the cycle changes.
+    """
+    act = act or run_agent
+    with obs.span("agent.poll", kind="consumer",
+                  parent=newest_trace_context(METRICS_FILE)):
+        # Inside the poll span so the backend's server span, and the database write
+        # under it, join this trace rather than starting one of their own.
+        with obs.span("agent.ingest_request", kind="client", dependency="backend"):
+            headers = {}
+            traceparent = obs.current_traceparent()
+            if traceparent:
+                headers["traceparent"] = traceparent
+            try:
+                requests.post(
+                    f"{BACKEND_URL}/runs/{RUN_ID}/metrics/sync",
+                    json={"metrics_file": METRICS_FILE},
+                    headers=headers,
+                    timeout=5
+                )
+            except Exception:
+                pass
+
+        anomalies = detect_anomalies(METRICS_FILE)
+        if not anomalies:
+            print(".", end="", flush=True)
+            return []
+
+        # only act if this anomaly type hasn't been handled within the last COOLDOWN_STEPS
+        new_anomalies = [
+            a for a in anomalies
+            if a["step"] - last_handled.get(a["type"], -COOLDOWN_STEPS) >= COOLDOWN_STEPS
+        ]
+        if not new_anomalies:
+            print(".", end="", flush=True)
+            return []
+        for a in new_anomalies:
+            last_handled[a["type"]] = a["step"]
+        act(new_anomalies)
+        return new_anomalies
 
 
 # ── main loop ──────────────────────────────────────────────────────────────────
 def main():
     print("Argus agent started")
+    # No-op unless OTEL_EXPORTER_OTLP_ENDPOINT is set.
+    obs.setup_tracing("argus-agent")
     if RUN_ID:
         logger.set_run_id(RUN_ID)
     print(f"watching: {METRICS_FILE}")
@@ -124,33 +204,9 @@ def main():
     last_handled = {}  # maps anomaly type -> step it was last handled at
 
     while True:
-        try:
-            requests.post(
-                f"http://backend:8000/runs/{RUN_ID}/metrics/sync",
-                json={"metrics_file": METRICS_FILE},
-                timeout=5
-            )
-        except Exception:
-            pass
-
-        anomalies = detect_anomalies(METRICS_FILE)
-
-        if anomalies:
-            # only act if this anomaly type hasn't been handled within the last COOLDOWN_STEPS
-            new_anomalies = [
-                a for a in anomalies
-                if a["step"] - last_handled.get(a["type"], -COOLDOWN_STEPS) >= COOLDOWN_STEPS
-            ]
-
-            if new_anomalies:
-                for a in new_anomalies:
-                    last_handled[a["type"]] = a["step"]
-                run_agent(new_anomalies)
-            else:
-                print(".", end="", flush=True)
-        else:
-            print(".", end="", flush=True)
-
+        poll_once(last_handled)
+        # Outside the poll span: a span that covered the sleep would report the poll
+        # interval as work.
         time.sleep(POLL_INTERVAL)
 
 
