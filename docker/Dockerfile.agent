@@ -6,6 +6,8 @@ COPY agent/requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY agent/ .
+# Shared with the backend rather than duplicated; both images flatten onto /app.
+COPY backend/argus_secrets.py .
 COPY training_job/ ../training_job/
 
 CMD ["python3", "loop.py"]

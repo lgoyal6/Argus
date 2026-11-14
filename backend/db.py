@@ -7,13 +7,17 @@ import time
 from pathlib import Path
 from supabase import create_client, Client
 
+from argus_secrets import get_secret
+
 # ── client ─────────────────────────────────────────────────────────────────────
 def get_client() -> Client:
+    # SUPABASE_URL is not a credential and stays plain configuration.
+    # SUPABASE_KEY goes through the resolver: Secret Manager when
+    # ARGUS_SECRET_PROJECT is set, the environment otherwise.
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    if not url or not key:
-        raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment")
-    return create_client(url, key)
+    if not url:
+        raise ValueError("SUPABASE_URL must be set in environment")
+    return create_client(url, get_secret("SUPABASE_KEY"))
 
 
 # ── runs ───────────────────────────────────────────────────────────────────────

@@ -3,3 +3,4 @@ pyyaml>=6.0
 python-dotenv>=1.0.0
 supabase>=2.4.0
 requests
+google-cloud-secret-manager>=2.20.0

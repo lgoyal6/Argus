@@ -12,6 +12,7 @@ from tools import TOOLS, run_tool
 from prompts import SYSTEM_PROMPT, build_user_prompt
 from logger import log_decision
 import anthropic
+from argus_secrets import get_secret
 from dotenv import load_dotenv
 load_dotenv("../.env")
 # ── config ─────────────────────────────────────────────────────────────────────
@@ -25,7 +26,10 @@ COOLDOWN_STEPS = 500      # steps to wait before re-triggering the same anomaly 
 
 # ── agent call ─────────────────────────────────────────────────────────────────
 def run_agent(anomalies):
-    client = anthropic.Anthropic()
+    # The model key comes from the resolver rather than from the ambient
+    # environment, so a deployed Argus reads it as its own workload identity
+    # instead of carrying it in the image.
+    client = anthropic.Anthropic(api_key=get_secret("ANTHROPIC_API_KEY"))
 
     user_prompt = build_user_prompt(
         anomalies=anomalies,
